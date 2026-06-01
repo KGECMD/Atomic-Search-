@@ -73,6 +73,9 @@ async function tryLoadSqlite() {
         indexed_at INTEGER
       );
       CREATE INDEX IF NOT EXISTS pages_host_idx ON pages(host);
+      CREATE INDEX IF NOT EXISTS pages_url_idx ON pages(url);
+      CREATE INDEX IF NOT EXISTS pages_title_idx ON pages(title);
+      CREATE INDEX IF NOT EXISTS pages_indexed_at_idx ON pages(indexed_at);
       CREATE INDEX IF NOT EXISTS pages_text_idx ON pages(text);
       CREATE TABLE IF NOT EXISTS crawl_queue (
         url TEXT PRIMARY KEY,
@@ -117,6 +120,7 @@ async function tryLoadSqlite() {
       if (!cols.includes("next_attempt_at")) db.exec("ALTER TABLE crawl_queue ADD COLUMN next_attempt_at INTEGER DEFAULT 0");
     } catch { /* ignore */ }
     db.exec("CREATE INDEX IF NOT EXISTS crawl_queue_ready_idx ON crawl_queue(next_attempt_at);");
+    db.exec("CREATE INDEX IF NOT EXISTS crawl_queue_url_idx ON crawl_queue(url);");
     sqlite = true;
     return true;
   } catch {
@@ -205,9 +209,35 @@ export async function insertPage({ url, title, text, host }) {
   return true;
 }
 
+// Batch insert up to 50 pages in a single transaction. Dramatically faster
+// than 50 individual insertPage() calls because SQLite commits once instead
+// of once per row. Pages that fail the quality gate are silently skipped.
+// Returns the count of pages actually written.
+export async function insertPageBatch(pages) {
+  if (!(await tryLoadSqlite())) return 0;
+  const stmt = db.prepare(
+    "INSERT OR REPLACE INTO pages(url, title, text, host, indexed_at) VALUES(?, ?, ?, ?, ?)"
+  );
+  const checkExisted = db.prepare("SELECT 1 FROM pages WHERE url = ?");
+  let written = 0;
+  const items = (pages || []).slice(0, 50);
+  const insertMany = db.transaction((batch) => {
+    for (const { url, title, text, host } of batch) {
+      if (!url) continue;
+      if (!shouldIndex(title, text)) continue;
+      const existed = checkExisted.get(url);
+      stmt.run(url, title || url, (text || "").slice(0, 4000), host || "", now());
+      if (!existed) { sessionAdded += 1; written += 1; }
+    }
+  });
+  insertMany(items);
+  return written;
+}
+
 // One-shot prune: sweep rows that would fail shouldIndex() today. Used by
 // the admin endpoint to clean up a messy index accumulated before the
 // quality gate was in place.
+
 export async function pruneIndex() {
   if (!(await tryLoadSqlite())) return { pruned: 0, remaining: 0 };
   const rows = db.prepare("SELECT url, title, text FROM pages").all();

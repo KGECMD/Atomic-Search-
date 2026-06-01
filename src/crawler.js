@@ -42,7 +42,10 @@ export async function crawlOne(url, { timeoutMs = 5000 } = {}) {
   if (isNsfwUrl(url)) return false; // never index adult content
   const norm = normaliseUrl(url);
   try {
-    const res = await privateFetch(url, { timeout: timeoutMs });
+    const res = await privateFetch(url, {
+      timeout: timeoutMs,
+      headers: { "User-Agent": CRAWLER_UA },
+    });
     if (!res.ok) {
       // 4xx/5xx — treat as a failure so the retry budget decrements. 404s
       // burn through their budget quickly and get marked dead.
@@ -109,16 +112,43 @@ async function seedIfEmpty() {
 // a process-local LRU of "already enqueued" URLs so we avoid the DB
 // round-trip for the most common dupes.
 
-// Round-4 speed tuning. On free-tier Render these are the upper bounds
-// before we start seeing event-loop lag; going higher hurts more than it
-// helps because the single vCPU can't parse HTML fast enough.
-const CONCURRENCY = Number(process.env.CRAWL_CONCURRENCY) || 32;
+// Free-tier tuning. 16 concurrent fetches keeps heap well under 400 MB on
+// a 512 MB Railway/Render instance; 32 was causing OOM on low-RAM hosts.
+// Override with CRAWL_CONCURRENCY env var if you have more RAM.
+const CONCURRENCY = Number(process.env.CRAWL_CONCURRENCY) || 16;
 const PER_HOST = Number(process.env.CRAWL_PER_HOST) || 8;
 const PER_HOST_MIN_GAP_MS = Number(process.env.CRAWL_HOST_GAP_MS) || 75;
 const LINKS_PER_PAGE = Number(process.env.CRAWL_LINKS_PER_PAGE) || 100;
 const DEDUP_LRU_CAP = 250000;
 const FETCH_TIMEOUT_MS = Number(process.env.CRAWL_TIMEOUT_MS) || 4000;
 const MAX_HTML_BYTES = 800_000;
+
+// Crawler User-Agent — identifies us to servers and links to our project.
+const CRAWLER_UA =
+  "Mozilla/5.0 (compatible; AtomicSearch/1.0; +https://atomic-search.com)";
+
+// Memory pressure thresholds. If heap exceeds HEAP_PAUSE_MB we stop taking
+// new crawl tasks until it drops below HEAP_RESUME_MB. Prevents OOM on
+// Railway/Render free-tier instances capped at 512 MB.
+const HEAP_PAUSE_MB = Number(process.env.CRAWL_HEAP_PAUSE_MB) || 400;
+const HEAP_RESUME_MB = Number(process.env.CRAWL_HEAP_RESUME_MB) || 300;
+let _heapPaused = false;
+
+function heapMb() {
+  try { return process.memoryUsage().heapUsed / 1024 / 1024; } catch { return 0; }
+}
+
+function checkMemoryPressure() {
+  const mb = heapMb();
+  if (!_heapPaused && mb > HEAP_PAUSE_MB) {
+    _heapPaused = true;
+    console.warn(`[crawler] heap ${mb.toFixed(0)}MB > ${HEAP_PAUSE_MB}MB — pausing crawl`);
+  } else if (_heapPaused && mb < HEAP_RESUME_MB) {
+    _heapPaused = false;
+    console.warn(`[crawler] heap ${mb.toFixed(0)}MB < ${HEAP_RESUME_MB}MB — resuming crawl`);
+  }
+  return _heapPaused;
+}
 
 const dedupLru = new Set();
 function noteSeen(url) {
@@ -154,8 +184,16 @@ async function crawlTask(task) {
   hostLastFetch.set(host, Date.now());
   try {
     if (!isSafeUrl(url)) { await dropFromQueue(url).catch(() => {}); return; }
-    const res = await privateFetch(url, { timeout: FETCH_TIMEOUT_MS });
-    if (!res.ok) { await recordCrawlFailure(url, `HTTP ${res.status}`).catch(() => {}); return; }
+    const res = await privateFetch(url, {
+      timeout: FETCH_TIMEOUT_MS,
+      headers: { "User-Agent": CRAWLER_UA },
+    });
+    // Log domain + HTTP status only — never the full URL (privacy).
+    if (!res.ok) {
+      console.warn(`[crawler] ${host} HTTP ${res.status}`);
+      await recordCrawlFailure(url, `HTTP ${res.status}`).catch(() => {});
+      return;
+    }
     const ct = res.headers.get("content-type") || "";
     if (!ct.includes("text/html")) { await dropFromQueue(url).catch(() => {}); return; }
     const html = (await res.text()).slice(0, MAX_HTML_BYTES);
@@ -204,6 +242,8 @@ export function startCrawler(intervalMs = 1000) {
   let inFlight = 0;
   let pumpErrors = 0; // v3: self-healing crash-loop guard
   const pump = async () => {
+    // Pause crawling if heap is under pressure to avoid OOM on free-tier.
+    if (checkMemoryPressure()) return;
     while (inFlight < CONCURRENCY) {
       let task = null;
       try { task = await nextCrawlTask(); } catch { task = null; }
