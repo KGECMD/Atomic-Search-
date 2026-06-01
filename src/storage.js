@@ -59,6 +59,13 @@ async function tryLoadSqlite() {
     db.pragma("cache_size = -20000");   // ~20 MB page cache
     db.pragma("temp_store = MEMORY");
     db.pragma("mmap_size = 134217728"); // 128 MB
+    // Trigger an automatic WAL checkpoint every 3 minutes worth of pages
+    // (180 * default 4 KB page ≈ 720 KB) instead of the default 1000 pages.
+    // This prevents WAL file bloat under heavy write workloads.
+    db.pragma("wal_autocheckpoint = 180");
+    // Prevent "database is locked" errors under concurrent load by waiting
+    // up to 5 s before giving up on a lock acquisition.
+    db.pragma("busy_timeout = 5000");
     db.exec(`
       CREATE TABLE IF NOT EXISTS kv (
         k TEXT PRIMARY KEY,
@@ -110,6 +117,15 @@ async function tryLoadSqlite() {
         created_at INTEGER,
         hit_count INTEGER DEFAULT 1
       );
+      CREATE TABLE IF NOT EXISTS crawl_stats (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        crawled_at INTEGER NOT NULL,
+        url TEXT,
+        status TEXT,
+        duration_ms INTEGER,
+        bytes INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS crawl_stats_crawled_at_idx ON crawl_stats(crawled_at);
     `);
     // Soft migration for older DBs that predate the failure-tracking columns.
     // SQLite has no "ADD COLUMN IF NOT EXISTS", so we probe via pragma. This
@@ -118,6 +134,12 @@ async function tryLoadSqlite() {
       const cols = db.prepare("PRAGMA table_info(crawl_queue)").all().map((r) => r.name);
       if (!cols.includes("attempts")) db.exec("ALTER TABLE crawl_queue ADD COLUMN attempts INTEGER DEFAULT 0");
       if (!cols.includes("next_attempt_at")) db.exec("ALTER TABLE crawl_queue ADD COLUMN next_attempt_at INTEGER DEFAULT 0");
+    } catch { /* ignore */ }
+    // Soft migration for pages table: add language and quality_score columns.
+    try {
+      const pageCols = db.prepare("PRAGMA table_info(pages)").all().map((r) => r.name);
+      if (!pageCols.includes("language")) db.exec("ALTER TABLE pages ADD COLUMN language TEXT");
+      if (!pageCols.includes("quality_score")) db.exec("ALTER TABLE pages ADD COLUMN quality_score INTEGER DEFAULT 0");
     } catch { /* ignore */ }
     db.exec("CREATE INDEX IF NOT EXISTS crawl_queue_ready_idx ON crawl_queue(next_attempt_at);");
     db.exec("CREATE INDEX IF NOT EXISTS crawl_queue_url_idx ON crawl_queue(url);");
@@ -266,9 +288,13 @@ export async function clearIndex() {
   return true;
 }
 
-export async function searchPages(q, limit = 20) {
+export async function searchPages(q, limit = 20, offset = 0) {
   if (!(await tryLoadSqlite())) return [];
-  const terms = (q || "")
+  // Sanitise: strip characters that have no meaning in LIKE patterns and
+  // could be used to craft pathological queries. The parameterised query
+  // already prevents SQL injection, but explicit stripping makes intent clear.
+  const sanitised = (q || "").replace(/[^\p{L}\p{N}\s\-_.]/gu, " ").trim();
+  const terms = sanitised
     .toLowerCase()
     .split(/\s+/)
     .map((t) => t.trim())
@@ -285,15 +311,20 @@ export async function searchPages(q, limit = 20) {
     const like = `%${t}%`;
     params.push(like, like);
   }
+  // Use a tight LIMIT at the SQL layer to avoid scanning the entire table.
+  // We fetch limit*4 candidates, post-filter by coverage, then apply OFFSET
+  // so callers can paginate through results without re-scanning from scratch.
+  const sqlLimit = limit * 4 + offset;
   const rows = db
     .prepare(
       `SELECT url, title, text, host, indexed_at FROM pages
        WHERE ${where}
        ORDER BY indexed_at DESC LIMIT ?`
     )
-    .all(...params, limit * 4);
+    .all(...params, sqlLimit);
   const minHits = terms.length <= 2 ? terms.length : Math.ceil(terms.length * 0.6);
   const filtered = [];
+  let skipped = 0;
   for (const r of rows) {
     const t = (r.title || "").toLowerCase();
     const b = (r.text || "").toLowerCase();
@@ -301,10 +332,41 @@ export async function searchPages(q, limit = 20) {
     for (const term of terms) {
       if (t.includes(term) || b.includes(term)) hits += 1;
     }
-    if (hits >= minHits) filtered.push(r);
+    if (hits >= minHits) {
+      if (skipped < offset) { skipped += 1; continue; }
+      filtered.push(r);
+    }
     if (filtered.length >= limit) break;
   }
   return filtered;
+}
+
+// Return the total number of indexed pages. Used by the UI stats chip.
+export async function getPageCount() {
+  if (!(await tryLoadSqlite())) return 0;
+  return db.prepare("SELECT COUNT(*) AS c FROM pages").get().c || 0;
+}
+
+// Force a WAL checkpoint right now. Runs every 3 minutes via the janitor
+// timer to prevent WAL file bloat under sustained write load. The PASSIVE
+// mode lets readers finish before checkpointing — no blocking.
+export async function checkpointWAL() {
+  if (!(await tryLoadSqlite())) return false;
+  try {
+    db.pragma("wal_checkpoint(PASSIVE)");
+    return true;
+  } catch { return false; }
+}
+
+// Reclaim space from deleted pages by running VACUUM. This is an expensive
+// operation (rewrites the entire DB file) so it should only be called from
+// an admin endpoint or a low-frequency maintenance job, never on hot paths.
+export async function vacuumIndex() {
+  if (!(await tryLoadSqlite())) return false;
+  try {
+    db.exec("VACUUM");
+    return true;
+  } catch { return false; }
 }
 
 export async function addSubmission(url) {

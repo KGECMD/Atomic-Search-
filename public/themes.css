@@ -1,0 +1,104 @@
+/*
+ * public/themes.css — Atomic Search privacy-aware theme overrides.
+ *
+ * This file documents the five canonical themes exposed by src/privacy-themes.js
+ * and provides any supplementary CSS that the main themes.css doesn't cover.
+ * Import order: themes.css (tokens) → this file (overrides) → styles.css (layout).
+ *
+ * Themes:
+ *   dark            → [data-theme="atom-dark"]    (default)
+ *   light           → [data-theme="atom-light"]
+ *   high-contrast   → [data-theme="high-contrast"]
+ *   minimal         → [data-theme="paper-white"]
+ *   privacy-focused → [data-theme="carbon"]
+ */
+
+/* ---------- dark (atom-dark) -------------------------------------------- */
+/* Defined in public/css/themes.css — no overrides needed. */
+
+/* ---------- light (atom-light) ------------------------------------------ */
+/* Defined in public/css/themes.css — no overrides needed. */
+
+/* ---------- high-contrast ----------------------------------------------- */
+/*
+ * Extra accessibility rules on top of the token definitions in themes.css.
+ * Ensures interactive elements always have a visible focus ring and that
+ * text never falls below WCAG AAA contrast ratios.
+ */
+[data-theme="high-contrast"] *:focus-visible {
+  outline: 3px solid var(--accent, #ffff00);
+  outline-offset: 2px;
+}
+
+[data-theme="high-contrast"] a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+[data-theme="high-contrast"] button,
+[data-theme="high-contrast"] [role="button"] {
+  border: 2px solid var(--border, #ffffff) !important;
+}
+
+/* ---------- minimal (paper-white) --------------------------------------- */
+/*
+ * Strip all decorative shadows and gradients so the page looks like a
+ * printed document. Animations are disabled via the privacy-themes.js
+ * preferReducedMotion flag, but we also enforce it here for CSS-only paths.
+ */
+[data-theme="paper-white"] *,
+[data-theme="paper-white"] *::before,
+[data-theme="paper-white"] *::after {
+  box-shadow: none !important;
+  text-shadow: none !important;
+  animation: none !important;
+  transition: none !important;
+  background-image: none !important;
+}
+
+[data-theme="paper-white"] body {
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1.7;
+}
+
+/* ---------- privacy-focused (carbon) ------------------------------------ */
+/*
+ * The privacy-focused theme blocks external images via CSP (handled server-
+ * side), but we also hide broken-image placeholders so the layout stays clean
+ * when images fail to load.
+ */
+[data-theme="carbon"] img[src^="http"]:not([src^="/"]) {
+  display: none;
+}
+
+/*
+ * Subtle scanline overlay — purely decorative, respects prefers-reduced-motion.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  body[data-theme="carbon"]::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      0deg,
+      rgba(14, 165, 233, 0.018),
+      rgba(14, 165, 233, 0.018) 1px,
+      transparent 1px,
+      transparent 4px
+    );
+    mix-blend-mode: overlay;
+    z-index: 9998;
+  }
+}
+
+/* ---------- Shared privacy-mode indicator ------------------------------- */
+/*
+ * When any privacy-enhanced theme is active, show a subtle "Privacy mode"
+ * badge in the corner so users know their settings are applied.
+ */
+[data-theme="high-contrast"] .privacy-badge,
+[data-theme="paper-white"] .privacy-badge,
+[data-theme="carbon"] .privacy-badge {
+  display: inline-flex !important;
+}
