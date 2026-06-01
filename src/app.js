@@ -25,7 +25,7 @@ import { crawlOne, seedFromSearch } from "./crawler.js";
 import { isNsfwResult, isNsfwText, isNsfwUrl } from "./nsfw.js";
 import { requestSnapshot, forceSnapshot, getSyncStatus } from "./git_sync.js";
 
-const SEARCH_TTL = 30 * 60 * 1000; // 30 min per page — good enough, not stale
+const SEARCH_TTL = 60 * 60 * 1000; // 60 min — less re-fetching, still fresh enough
 const IMAGE_TTL = 30 * 60 * 1000;
 const SAFETY_TTL = 60 * 60 * 1000; // 1h (under the 24h cache in safety.js)
 
@@ -68,6 +68,7 @@ function securityHeaders() {
     "Content-Security-Policy": csp,
     "X-Frame-Options": "DENY",
     "X-Content-Type-Options": "nosniff",
+    "X-XSS-Protection": "1; mode=block",
     "Cross-Origin-Opener-Policy": "same-origin",
     // HSTS is only meaningful over TLS; safe to set anyway and let browsers
     // ignore it on HTTP. Two years, no preload (operators can opt in).
@@ -437,7 +438,11 @@ export function buildApp() {
 
   app.use("*", cors({ origin: "*", allowHeaders: ["Content-Type"] }));
   app.use("*", async (c, next) => {
+    const reqStart = Date.now();
+    // Opaque per-request ID for debugging without logging IPs or paths.
+    const reqId = Math.random().toString(36).slice(2, 10);
     await next();
+    const elapsed = Date.now() - reqStart;
     for (const [k, v] of Object.entries(privacyHeaders())) c.res.headers.set(k, v);
     // /proxy responses are consumed inside the same-origin Safe-view iframe,
     // so we must NOT hand them DENY/frame-ancestors 'none'. The proxy
@@ -449,6 +454,8 @@ export function buildApp() {
       c.res.headers.set("Content-Security-Policy", "frame-ancestors 'self'");
       c.res.headers.set("Referrer-Policy", "no-referrer");
     }
+    c.res.headers.set("X-Response-Time", elapsed + "ms");
+    c.res.headers.set("X-Request-ID", reqId);
   });
 
   app.get("/api/health", (c) => c.json({ ok: true, time: Date.now() }));
@@ -562,7 +569,7 @@ export function buildApp() {
       });
     }
     const page = Math.max(1, Math.min(20, Number(c.req.query("page")) || 1));
-    const perPage = Math.max(10, Math.min(200, Number(c.req.query("per_page")) || 50));
+    const perPage = Math.max(10, Math.min(200, Number(c.req.query("per_page")) || 30));
     const key = `search:${q.toLowerCase()}:p${page}:n${perPage}`;
 
     // Helper: pulls the strong / tail Atomic-hit buckets out of the current
@@ -624,13 +631,25 @@ export function buildApp() {
     //    respond — i.e. the very first search for a new query can still
     //    show Atomic hits, not just on the repeat.
     // 4. Re-query own-index to pick up pages crawled during step 3.
+    const _t0 = Date.now();
     let { fused: ownFused, tail: ownTailPool } = await splitOwn();
+    const _ownMs = Date.now() - _t0;
 
+    const _t1 = Date.now();
     const meta = await metaSearch(q, {
       page,
       perPage,
       extraLists: ownFused.length ? [ownFused] : [],
     });
+    const _metaMs = Date.now() - _t1;
+    // Log slow searches (>500ms) so operators can identify bottlenecks.
+    // Never logs the query string — only timing and result counts.
+    if (_ownMs + _metaMs > 500) {
+      console.warn(
+        `[search] slow query: own-index=${_ownMs}ms meta=${_metaMs}ms ` +
+        `results=${meta.results?.length ?? 0} page=${page}`
+      );
+    }
 
     // Eager-crawl top 5 meta URLs with a 2.5s budget. The rest are queued
     // for the background crawler as usual.

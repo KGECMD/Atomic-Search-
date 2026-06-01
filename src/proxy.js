@@ -246,6 +246,8 @@ export async function proxyHandler(targetUrl, { safeView = false } = {}) {
 
   // Strip upstream cookies + any header that could leak/coerce identity —
   // user stays fully anonymous and the rewritten page can't re-embed itself.
+  // Tracking-adjacent headers are also stripped so analytics vendors can't
+  // fingerprint the user via the proxy response.
   const STRIPPED_RESP = new Set([
     "set-cookie",
     "set-cookie2",
@@ -265,10 +267,17 @@ export async function proxyHandler(targetUrl, { safeView = false } = {}) {
     "report-to",
     "nel",
     "reporting-endpoints",
+    // Tracking / analytics headers — strip so vendors can't fingerprint via proxy.
+    "x-tracking-id",
+    "x-request-id",
+    "x-correlation-id",
   ]);
   const headers = new Headers();
   res.headers.forEach((v, k) => {
-    if (STRIPPED_RESP.has(k.toLowerCase())) return;
+    const kl = k.toLowerCase();
+    if (STRIPPED_RESP.has(kl)) return;
+    // Strip wildcard tracking header families.
+    if (kl.startsWith("x-analytics-") || kl.startsWith("x-segment-")) return;
     headers.set(k, v);
   });
   headers.set("Referrer-Policy", "no-referrer");

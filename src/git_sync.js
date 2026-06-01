@@ -44,6 +44,14 @@ let syncing = false;
 // that assigns it) so editors / linters don't flag a forward reference.
 let manualTrigger = null;
 
+// Exponential backoff state for push failures. On consecutive errors we
+// wait longer before retrying (1s → 2s → 4s … capped at 30s) so a
+// transient GitHub outage doesn't spam the API. Resets on any success.
+let _pushBackoffMs = 0;
+let _pushBackoffUntil = 0;
+const PUSH_BACKOFF_BASE_MS = 1000;
+const PUSH_BACKOFF_CAP_MS = 30000;
+
 // Lightweight health counters so the UI / /api/stats can show the index
 // persistence loop working.
 const syncHealth = {
@@ -98,12 +106,9 @@ function getConfig() {
   let repo = env("GH_INDEX_REPO", "") || env("GITHUB_REPOSITORY", "") || env("GH_REPO", "") || DEFAULT_REPO;
   repo = repo.replace(/^https?:\/\/github.com\//i, "").replace(/\.git$/i, "");
   const branch = env("GH_INDEX_BRANCH", DEFAULT_BRANCH);
-  // Default 120s: Render free-tier idles quickly with low traffic, and we
-  // want every 2 minutes of crawler growth durably persisted before the
-  // instance gets put to sleep. Floor at 30s to avoid misconfigured loops
-  // spamming GitHub — most free-tier hosts still shut down with enough
-  // warning (SIGTERM flush) that this is usually overkill, but it's cheap.
-  const interval = Math.max(30, Number(env("GH_INDEX_INTERVAL", "120")) || 120) * 1000;
+  // Default 180s (3 min): balances index durability against GitHub API rate
+  // limits. Floor at 30s to avoid misconfigured loops spamming GitHub.
+  const interval = Math.max(30, Number(env("GH_INDEX_INTERVAL", "180")) || 180) * 1000;
   const dataDir = path.resolve(env("DATA_DIR", path.join(process.cwd(), "data")));
   const userName = env("GH_INDEX_USER", "atomic-search-bot");
   const userEmail = env("GH_INDEX_EMAIL", "atomic-search-bot@users.noreply.github.com");
@@ -325,6 +330,12 @@ async function appendStatsHistory(workDir, snapshot) {
  */
 async function pushSnapshot(cfg, workDir, extraHeader) {
   if (syncing) return;
+  // Honour exponential backoff: if a recent push failed, skip until the
+  // cooldown has elapsed so we don't hammer the GitHub API on repeated errors.
+  if (_pushBackoffUntil > Date.now()) {
+    log(`snapshot skipped — backoff active for ${Math.ceil((_pushBackoffUntil - Date.now()) / 1000)}s more`);
+    return;
+  }
   syncing = true;
   try {
     const live = path.join(cfg.dataDir, INDEX_FILE);
@@ -398,7 +409,12 @@ async function pushSnapshot(cfg, workDir, extraHeader) {
     if (commit.code !== 0) {
       syncHealth.errors += 1;
       syncHealth.lastError = (commit.stderr || "commit failed").split("\n").pop();
-      log("commit failed:", syncHealth.lastError);
+      _pushBackoffMs = Math.min(
+        _pushBackoffMs ? _pushBackoffMs * 2 : PUSH_BACKOFF_BASE_MS,
+        PUSH_BACKOFF_CAP_MS
+      );
+      _pushBackoffUntil = Date.now() + _pushBackoffMs;
+      log("commit failed (backoff", _pushBackoffMs + "ms):", syncHealth.lastError);
       return;
     }
     const push = await runGit(
@@ -408,14 +424,22 @@ async function pushSnapshot(cfg, workDir, extraHeader) {
     if (push.code !== 0) {
       syncHealth.errors += 1;
       syncHealth.lastError = (push.stderr || "push failed").split("\n").pop();
-      log("push failed:", syncHealth.lastError);
+      _pushBackoffMs = Math.min(
+        _pushBackoffMs ? _pushBackoffMs * 2 : PUSH_BACKOFF_BASE_MS,
+        PUSH_BACKOFF_CAP_MS
+      );
+      _pushBackoffUntil = Date.now() + _pushBackoffMs;
+      log("push failed (backoff", _pushBackoffMs + "ms):", syncHealth.lastError);
       return;
     }
+    // Success — reset backoff.
+    _pushBackoffMs = 0;
+    _pushBackoffUntil = 0;
     syncHealth.pushes += 1;
     syncHealth.lastPushAt = Date.now();
     syncHealth.lastPushSize = liveStat.size;
     syncHealth.lastPushSkipped = null;
-    log(`snapshot pushed (${liveStat.size}B)`);
+    log(`snapshot pushed (${liveStat.size}B, ${(liveStat.size / 1024).toFixed(1)}KB)`);
   } finally {
     syncing = false;
   }

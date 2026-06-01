@@ -37,8 +37,8 @@ async function main() {
   app.get("*", serveStatic({ path: "./public/index.html" }));
 
   serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, (info) => {
-    // Intentionally minimal — no request logging (privacy).
-    console.log(`Atomic Search listening on http://localhost:${info.port}`);
+    // Intentionally minimal — no request logging, no IPs (privacy).
+    console.log(`Atomic Search listening on port ${info.port}`);
   });
 
   // Crawler runs after the restore completes, so the first page it writes
