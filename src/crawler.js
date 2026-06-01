@@ -112,10 +112,10 @@ async function seedIfEmpty() {
 // a process-local LRU of "already enqueued" URLs so we avoid the DB
 // round-trip for the most common dupes.
 
-// Free-tier tuning. 16 concurrent fetches keeps heap well under 400 MB on
+// Free-tier tuning. 20 concurrent fetches keeps heap well under 400 MB on
 // a 512 MB Railway/Render instance; 32 was causing OOM on low-RAM hosts.
 // Override with CRAWL_CONCURRENCY env var if you have more RAM.
-const CONCURRENCY = Number(process.env.CRAWL_CONCURRENCY) || 16;
+const CONCURRENCY = Number(process.env.CRAWL_CONCURRENCY) || 20;
 const PER_HOST = Number(process.env.CRAWL_PER_HOST) || 8;
 const PER_HOST_MIN_GAP_MS = Number(process.env.CRAWL_HOST_GAP_MS) || 75;
 const LINKS_PER_PAGE = Number(process.env.CRAWL_LINKS_PER_PAGE) || 100;
