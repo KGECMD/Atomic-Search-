@@ -18,6 +18,9 @@ import {
   stats as storageStats,
   pruneIndex,
   clearIndex,
+  checkpointWAL,
+  vacuumIndex,
+  getPageCount,
 } from "./storage.js";
 import { isSafeUrl } from "./safeurl.js";
 import { scanDownload, scanBuffer } from "./scan.js";
@@ -485,6 +488,22 @@ export function buildApp() {
   // Cache and user submissions are preserved.
   app.post("/api/admin/clear-index", async (c) => {
     const ok = await clearIndex();
+    return c.json({ ok });
+  });
+
+  // Admin: force a WAL checkpoint immediately. Normally the periodic timer
+  // handles this every 3 minutes, but operators can trigger it on demand
+  // (e.g. before a backup or after a large batch import).
+  app.post("/api/admin/checkpoint", async (c) => {
+    const ok = await checkpointWAL();
+    return c.json({ ok });
+  });
+
+  // Admin: VACUUM the database to reclaim space from deleted pages. This
+  // rewrites the entire DB file so it is slow — only call it from the
+  // admin panel, never on a hot path.
+  app.post("/api/admin/vacuum", async (c) => {
+    const ok = await vacuumIndex();
     return c.json({ ok });
   });
 
@@ -1039,4 +1058,16 @@ ${verdict === "pending" ? `<script>
   });
 
   return app;
+}
+
+// Periodic WAL checkpoint: runs every 3 minutes to prevent WAL file bloat.
+// This is a module-level side-effect so it starts as soon as the app module
+// is imported (i.e. on server boot). The timer is unref'd so it doesn't
+// prevent the process from exiting cleanly during tests.
+if (typeof process !== "undefined" && process.versions?.node) {
+  const WAL_CHECKPOINT_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+  const _walTimer = setInterval(() => {
+    checkpointWAL().catch(() => {});
+  }, WAL_CHECKPOINT_INTERVAL_MS);
+  if (_walTimer.unref) _walTimer.unref();
 }

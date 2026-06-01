@@ -16,12 +16,12 @@
 // independently unit-testable (see ranking.test.js).
 
 export const WEIGHTS = Object.freeze({
-  bm25: 0.28,
-  titleMatch: 0.27,
-  agreement: 0.10,
-  authority: 0.12,
-  rrf: 0.07,
-  structure: 0.08,
+  bm25: 0.32,
+  titleMatch: 0.25,
+  agreement: 0.08,
+  authority: 0.15,
+  rrf: 0.05,
+  structure: 0.07,
   proximity: 0.08, // v5: phrase-proximity bonus in snippet
 });
 
@@ -110,8 +110,13 @@ export function buildQueryContext(query) {
 // term-frequency saturation with title vs snippet field weighting.
 // Returns a value in [0, 1].
 const BM25_K1 = 1.2;
-const BM25_TITLE_W = 3.0;
+const BM25_B = 0.75;           // field-length normalisation factor
+const BM25_TITLE_W = 4.0;      // increased from 3.0 — title is the strongest signal
 const BM25_SNIPPET_W = 1.0;
+// Approximate average field lengths (in tokens) used for BM25b normalisation.
+// These are corpus-level constants; exact values matter less than the ratio.
+const AVG_TITLE_LEN = 8;
+const AVG_SNIPPET_LEN = 60;
 
 function termFrequency(text, token) {
   if (!text || !token) return 0;
@@ -166,12 +171,18 @@ export function bm25Score(item, ctx) {
   if (!tokens.length) return 0;
   const title = stripTitleBrand((item.title || "").toLowerCase());
   const snippet = (item.snippet || item.text || "").toLowerCase();
+  // Field lengths in tokens for BM25b normalisation.
+  const titleLen = Math.max(1, title.split(/\s+/).filter(Boolean).length);
+  const snippetLen = Math.max(1, snippet.split(/\s+/).filter(Boolean).length);
   let sum = 0;
   for (const tok of tokens) {
     const tfT = tfWithVariants(title, tok);
     const tfS = tfWithVariants(snippet, tok);
-    const satT = tfT / (tfT + BM25_K1);     // → [0,1)
-    const satS = tfS / (tfS + BM25_K1);     // → [0,1)
+    // BM25b: normalise TF by field length relative to corpus average.
+    const normT = BM25_K1 * (1 - BM25_B + BM25_B * (titleLen / AVG_TITLE_LEN));
+    const normS = BM25_K1 * (1 - BM25_B + BM25_B * (snippetLen / AVG_SNIPPET_LEN));
+    const satT = tfT / (tfT + normT);   // → [0,1)
+    const satS = tfS / (tfS + normS);   // → [0,1)
     sum += BM25_TITLE_W * satT + BM25_SNIPPET_W * satS;
   }
   // Normalise by max possible saturation sum:
@@ -198,6 +209,24 @@ export function titleMatchScore(item, ctx) {
     const qw = ctx.tokens.length;
     const noise = Math.max(0, tw - qw);
     return clamp01(0.55 + 0.15 / (1 + noise * 0.5));
+  }
+
+  // Prefix-match bonus: first token of the query matches the start of the
+  // title (e.g. query "react" matching "React Documentation"). This is a
+  // strong intent signal — the page is explicitly about the queried topic.
+  if (ctx.tokens.length >= 1) {
+    const firstToken = ctx.tokens[0];
+    if (firstToken.length >= 3 && title.startsWith(firstToken)) {
+      // Scale by how many other tokens also appear in the title.
+      let extraHits = 0;
+      for (let i = 1; i < ctx.tokens.length; i++) {
+        if (title.includes(ctx.tokens[i])) extraHits += 1;
+      }
+      const extraCoverage = ctx.tokens.length > 1
+        ? extraHits / (ctx.tokens.length - 1)
+        : 1;
+      return clamp01(0.75 * (0.5 + 0.5 * extraCoverage));
+    }
   }
 
   // Token coverage.
@@ -282,10 +311,52 @@ export function proximityScore(item, ctx) {
 
   positions.sort((a, b) => a - b);
   const span = positions[positions.length - 1] - positions[0];
-  // Perfect proximity (span of 0..40 chars) → 1. 300+ → 0.
+  // Perfect proximity (span of 0..40 chars) → 1. 150+ → 0 (tighter than
+  // the old 300-char threshold — a 150-char window is roughly one sentence,
+  // which is a much stronger signal that the passage is actually about the
+  // query).
   if (span <= 40) return 1;
-  if (span >= 300) return 0;
-  return clamp01(1 - (span - 40) / 260);
+  if (span >= 150) return 0;
+  return clamp01(1 - (span - 40) / 110);
+}
+
+// Freshness bonus: pages indexed in the last 7 days get a 0.1 boost;
+// older pages decay linearly to 0 over 90 days. Returns a value in [0, 1].
+export function freshnessScore(indexedAt) {
+  const age = Math.max(0, Date.now() - (indexedAt || 0));
+  const sevenDays = 7 * 24 * 3600 * 1000;
+  const ninetyDays = 90 * 24 * 3600 * 1000;
+  if (age <= sevenDays) return 0.1;
+  if (age >= ninetyDays) return 0;
+  return clamp01(0.1 * (1 - (age - sevenDays) / (ninetyDays - sevenDays)));
+}
+
+// Domain reputation boost: .edu, .gov, and .org TLDs are generally more
+// authoritative than commercial domains. Returns 0.15 for boosted TLDs,
+// 0 otherwise. Intentionally conservative — only TLD-level, not per-host.
+export function domainReputationScore(host) {
+  if (!host) return 0;
+  const h = host.toLowerCase().replace(/^www\./, "");
+  if (h.endsWith(".edu") || h.endsWith(".gov") || h.endsWith(".org")) return 0.15;
+  return 0;
+}
+
+// Snippet quality penalty: snippets that are mostly ellipses or very short
+// are low-quality (truncated, boilerplate, or auto-generated). Returns a
+// value in [0, 1] where 1 is a clean snippet and 0 is heavily penalised.
+export function snippetQualityScore(snippet) {
+  const s = (snippet || "").trim();
+  if (!s || s.length < 20) return 0;
+  // Count ellipsis occurrences (both "..." and "…").
+  const ellipsisCount = (s.match(/\.{3}|…/g) || []).length;
+  const wordCount = s.split(/\s+/).filter(Boolean).length;
+  // Penalise if more than 20% of "words" are ellipses, or if there are
+  // more than 3 ellipses in a short snippet.
+  const ellipsisRatio = ellipsisCount / Math.max(1, wordCount);
+  if (ellipsisRatio > 0.2 || (ellipsisCount > 3 && wordCount < 30)) {
+    return clamp01(1 - ellipsisRatio * 2);
+  }
+  return 1;
 }
 
 // Internal variant helper exposed under another name so we don't have to
