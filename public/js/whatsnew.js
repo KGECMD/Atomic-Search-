@@ -1,10 +1,10 @@
 // What's-new modal: shown once per version (keyed by window.ATOMIC_VERSION
-// or fallback constant). Dismiss stores "v3.0.0" (this version only) or
+// or fallback constant). Dismiss stores "v3.1.0" (this version only) or
 // "forever" (never again regardless of future version bumps).
 
 (function () {
   "use strict";
-  const VERSION = "v3.0.0";
+  const VERSION = "v3.1.0";
   const KEY = "atomic:whatsnew";
   const FOREVER = "forever";
 

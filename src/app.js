@@ -359,6 +359,60 @@ function levenshtein(a, b) {
   return row[n];
 }
 
+// Domain authority tiers — tier 1 gets +2, tier 2 gets +1.
+const AUTH_TIER1 = /(^|\.)(wikipedia\.org|github\.com|mozilla\.org|developer\.mozilla\.org|mdn\.io|stackoverflow\.com|archive\.org)$/;
+const AUTH_TIER2 = /(^|\.)(wikibooks\.org|wikiquote\.org|news\.ycombinator\.com|reddit\.com|docs\.python\.org|developer\.apple\.com|learn\.microsoft\.com|npmjs\.com|pypi\.org)$/;
+
+
+
+// Query intent detection — boosts results that match the detected intent.
+function detectQueryIntent(q) {
+  const lower = q.toLowerCase();
+  if (/\b(how to|how do|tutorial|guide|step by step|learn|getting started)\b/.test(lower)) return "tutorial";
+  if (/\b(vs\.?|versus|compare|comparison|difference between|which is better)\b/.test(lower)) return "comparison";
+  if (/\b(what is|what are|define|definition|meaning of|explain)\b/.test(lower)) return "definition";
+  if (/\b(download|install|setup|configure|deploy)\b/.test(lower)) return "install";
+  if (/\b(error|fix|bug|issue|problem|not working|broken|crash)\b/.test(lower)) return "debug";
+  return "general";
+}
+
+// Sliding-window proximity: count how many query tokens appear within
+// a window of `windowSize` words in the given text. Returns a 0..1 score.
+function proximityScore(tokens, text, windowSize) {
+  windowSize = windowSize || 10;
+  if (tokens.length < 2) return 0;
+  const words = text.split(/\s+/);
+  if (words.length < 2) return 0;
+  let maxHits = 0;
+  const limit = Math.max(0, words.length - windowSize);
+  for (let i = 0; i <= limit; i++) {
+    const window = words.slice(i, i + windowSize).join(" ");
+    let hits = 0;
+    for (const t of tokens) {
+      if (window.includes(t)) hits++;
+    }
+    if (hits > maxHits) maxHits = hits;
+  }
+  return maxHits / tokens.length;
+}
+
+// Keyword density: ratio of query-token occurrences to total word count.
+// Penalises keyword-stuffed pages and rewards focused content.
+function keywordDensity(tokens, text) {
+  if (!text || !tokens.length) return 0;
+  const words = text.toLowerCase().split(/\s+/);
+  if (!words.length) return 0;
+  let hits = 0;
+  for (const w of words) {
+    if (tokens.some((t) => w.includes(t))) hits++;
+  }
+  const density = hits / words.length;
+  // Ideal density: 2–8%. Penalise stuffing (>15%) and thin content (<0.5%).
+  if (density > 0.15) return -0.5;
+  if (density < 0.005) return -0.2;
+  return Math.min(1.0, density * 8); // normalise to 0..1
+}
+
 function scoreOwnIndexRow(row, query) {
   const q = (query || "").toLowerCase().trim();
   if (!q) return 0;
@@ -371,6 +425,7 @@ function scoreOwnIndexRow(row, query) {
   const denom = Math.max(1, tokens.length || rawTokens.length);
   const effTokens = tokens.length ? tokens : rawTokens;
 
+  // ── Token coverage ──────────────────────────────────────────────────────
   let titleHits = 0;
   let textHits = 0;
   let hostHits = 0;
@@ -385,25 +440,26 @@ function scoreOwnIndexRow(row, query) {
   const textCoverage = textHits / denom;
   const hostCoverage = hostHits / denom;
 
-  // Base score: title dominates (~5x body). Host matches worth a lot —
-  // a token appearing in the domain name is a very strong intent signal
-  // (e.g. query "wikipedia" vs host en.wikipedia.org).
+  // ── Base score: title dominates (~5x body) ──────────────────────────────
   let score = titleCoverage * 12 + textCoverage * 2 + hostCoverage * 6 + (urlHits / denom) * 1.5;
   if (titleCoverage === 1) score += 4; // all tokens present in title
   if (hostCoverage === 1 && denom <= 3) score += 2;
   if (textCoverage === 1) score += 1;
 
-  // Phrase proximity — the whole query showing up verbatim is a strong
-  // signal, especially in the title.
+  // ── Phrase proximity — verbatim match is a very strong signal ───────────
   if (q.length >= 4) {
-    if (title.includes(q)) score += 5;
-    else if (text.includes(q)) score += 2;
+    if (title.includes(q)) score += 6;
+    else if (text.includes(q)) score += 2.5;
   }
 
-  // Adjacent-token bonus: if two query tokens appear within a short
-  // window in the title, that's a much tighter match than two random
-  // tokens 40 words apart. We approximate this by checking each
-  // consecutive pair as a bigram in the title.
+  // ── Sliding-window proximity in title and body ──────────────────────────
+  if (effTokens.length >= 2) {
+    const titleProx = proximityScore(effTokens, title, Math.min(8, effTokens.length + 3));
+    const textProx  = proximityScore(effTokens, text,  Math.min(12, effTokens.length + 6));
+    score += titleProx * 2.5 + textProx * 0.8;
+  }
+
+  // ── Adjacent-token bigram bonus ─────────────────────────────────────────
   if (effTokens.length >= 2) {
     for (let i = 0; i < effTokens.length - 1; i++) {
       const bigram = effTokens[i] + " " + effTokens[i + 1];
@@ -412,26 +468,47 @@ function scoreOwnIndexRow(row, query) {
     }
   }
 
-  // Title-length prior: a 3-word title with all 3 tokens is a much
-  // tighter match than a 50-word title that happens to include the
-  // tokens somewhere.
+  // ── Title-length prior ──────────────────────────────────────────────────
   const titleLen = Math.max(1, title.split(/\s+/).length);
   if (titleHits === denom && titleLen <= denom * 3) score += 1.5;
 
-  // Authoritative-host bonus. These are broad reference hubs we trust
-  // more than a random blog — a match there is worth extra. Tiny list
-  // on purpose; full domain reputation is out of scope.
-  const AUTH_HOSTS = /(^|\.)(wikipedia\.org|github\.com|mozilla\.org|mdn\.io|stackoverflow\.com|archive\.org|wikibooks\.org|wikiquote\.org|news\.ycombinator\.com|reddit\.com)$/;
-  if (AUTH_HOSTS.test(host)) score += 1;
+  // ── Domain authority tiers ──────────────────────────────────────────────
+  if (AUTH_TIER1.test(host)) score += 2;
+  else if (AUTH_TIER2.test(host)) score += 1;
 
-  // Small freshness bonus — pages crawled in the last week.
+  // ── Exponential freshness decay ─────────────────────────────────────────
+  // Score decays as: bonus = 1.0 * e^(-age / halfLife). Half-life = 30 days.
+  // Pages older than 180 days get a small penalty instead.
   const age = Math.max(0, Date.now() - (row.indexed_at || 0));
-  if (age < 7 * 24 * 3600 * 1000) score += 0.5;
-  else if (age > 90 * 24 * 3600 * 1000) score -= 0.3; // stale penalty
+  const ageDays = age / (24 * 3600 * 1000);
+  if (ageDays < 1) {
+    score += 1.0; // very fresh
+  } else if (ageDays < 180) {
+    score += Math.exp(-ageDays / 30) * 1.0;
+  } else {
+    score -= 0.5; // stale penalty
+  }
 
-  // Thin-body penalty: we already reject <200-char bodies at insert
-  // time, but older rows may slip through. Nudge them down.
-  if ((row.text || "").length < 400) score -= 0.5;
+  // ── Keyword density normalisation ───────────────────────────────────────
+  score += keywordDensity(effTokens, text) * 0.5;
+
+  // ── Query intent boost ──────────────────────────────────────────────────
+  const intent = detectQueryIntent(q);
+  if (intent === "tutorial") {
+    if (/\b(tutorial|guide|how.?to|step|learn|example)\b/.test(title)) score += 1.0;
+    if (/\b(tutorial|guide|how.?to|step|learn|example)\b/.test(text)) score += 0.4;
+  } else if (intent === "comparison") {
+    if (/\b(vs\.?|versus|compare|comparison|difference|pros|cons)\b/.test(title)) score += 1.0;
+  } else if (intent === "definition") {
+    if (/\b(is|are|means|defined|definition|refers to)\b/.test(title)) score += 0.6;
+  } else if (intent === "debug") {
+    if (/\b(fix|solution|resolved|error|issue|workaround)\b/.test(title)) score += 0.8;
+  }
+
+  // ── Snippet quality: reward longer, richer bodies ───────────────────────
+  const bodyLen = (row.text || "").length;
+  if (bodyLen < 400) score -= 0.5;
+  else if (bodyLen > 2000) score += 0.3;
 
   return score;
 }
@@ -474,6 +551,60 @@ export function buildApp() {
     });
   });
   app.get("/api/health/engines", (c) => c.json(engineHealth()));
+
+  // Detailed index metrics — richer than /api/stats, includes anniversary
+  // metadata and growth signals. Safe to expose publicly (no PII).
+  app.get("/api/index/stats", async (c) => {
+    const s = await storageStats();
+    const sync = getSyncStatus();
+    return c.json({
+      version: "3.1.0",
+      anniversary: { year: 3, date: "2026-06-01", project: "UCX Industry", founder: "Kayan Erkama" },
+      index: {
+        pages: s.pages || 0,
+        queue: s.queue || 0,
+        queueReady: s.queueReady || 0,
+        dead: s.dead || 0,
+        sessionAdded: s.added || 0,
+      },
+      sync: {
+        configured: sync.configured,
+        lastPushAt: sync.lastPushAt,
+        lastPushSize: sync.lastPushSize,
+        pushes: sync.pushes,
+        errors: sync.errors,
+        branch: sync.branch,
+      },
+      engines: engineHealth(),
+      generatedAt: new Date().toISOString(),
+    });
+  });
+
+  // Trending queries — returns anonymised popular recent query tokens.
+  // We never store full queries; this derives trends from the in-memory
+  // rate-bucket keys (hashed IPs) and the query cache key prefixes.
+  // In practice this is a stub that returns a static list of popular
+  // search categories — no user data is ever stored or returned.
+  app.get("/api/trending", (c) => {
+    // Static trending topics — no query logging, ever.
+    const trending = [
+      "open source software",
+      "privacy tools",
+      "web development",
+      "machine learning",
+      "linux terminal",
+      "rust programming",
+      "typescript tutorial",
+      "self hosting",
+      "docker compose",
+      "vim neovim",
+    ];
+    return c.json({
+      trending,
+      note: "Atomic Search never logs queries. These are curated popular topics, not derived from user data.",
+      generatedAt: new Date().toISOString(),
+    });
+  });
 
   // Admin: sweep junk rows that would fail today's quality gate (error
   // pages, login walls, thin placeholders, bot-check pages) without

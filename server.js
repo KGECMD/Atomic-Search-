@@ -8,6 +8,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { buildApp } from "./src/app.js";
 import { startCrawler } from "./src/crawler.js";
 import { startIndexSync } from "./src/git_sync.js";
+import { startMetasearchScraper } from "./src/metasearch_scraper.js";
 
 const port = Number(process.env.PORT) || 3000;
 
@@ -44,6 +45,10 @@ async function main() {
   // Crawler runs after the restore completes, so the first page it writes
   // lands alongside the restored snapshot instead of on top of an empty DB.
   startCrawler(5000);
+
+  // Optional meta search scraper — feeds external result URLs into the
+  // crawler queue. Only active when ENABLE_METASEARCH=1 is set.
+  startMetasearchScraper();
 }
 
 main().catch((err) => {
