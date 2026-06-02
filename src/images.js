@@ -36,9 +36,33 @@ function imageCacheSet(key, data) {
 }
 
 // Validate that an image URL is a real http/https URL (not data:, blob:, etc.)
+// Also rejects known broken CDN patterns and overly short URLs.
 function isValidImageUrl(url) {
   if (!url || typeof url !== "string") return false;
-  return /^https?:\/\/.{10,}/.test(url);
+  if (!/^https?:\/\/.{10,}/.test(url)) return false;
+  // Reject data URIs that somehow slipped through, blob URLs, and
+  // obviously broken placeholder patterns.
+  if (/^data:|^blob:|placeholder|noimage|no-image|default\.gif|blank\.gif/i.test(url)) return false;
+  // Must have a recognisable image extension OR come from a known image CDN.
+  // This avoids proxying HTML pages that happen to be linked as images.
+  const hasImgExt = /\.(jpe?g|png|gif|webp|avif|svg|bmp|tiff?|ico)(\?|$)/i.test(url);
+  const isImgCdn = /\b(images\.|img\.|cdn\.|static\.|media\.|photos\.|pics\.|thumb|thumbnail|i\.imgur|pbs\.twimg|upload\.wikimedia|gstatic\.com|googleusercontent\.com|bing\.com\/th|duckduckgo\.com\/i)/i.test(url);
+  return hasImgExt || isImgCdn;
+}
+
+// Normalise a thumbnail URL: prefer HTTPS, strip known tracking params.
+function normaliseThumbnail(url) {
+  if (!url) return url;
+  try {
+    const u = new URL(url);
+    // Upgrade to HTTPS where possible.
+    if (u.protocol === "http:") u.protocol = "https:";
+    // Strip common tracking/session params that break caching.
+    ["utm_source","utm_medium","utm_campaign","fbclid","gclid","ref","source"].forEach((p) => u.searchParams.delete(p));
+    return u.toString();
+  } catch {
+    return url;
+  }
 }
 
 async function ddgImages(q) {
@@ -81,12 +105,13 @@ async function ddgImages(q) {
       .slice(0, 40)
       .map((r) => ({
         title: stripTags(r.title || ""),
-        thumbnail: r.thumbnail || r.image,
-        image: r.image || r.thumbnail,
+        thumbnail: normaliseThumbnail(r.thumbnail || r.image),
+        image: normaliseThumbnail(r.image || r.thumbnail),
         source: r.url,
         width: r.width,
         height: r.height,
         engine: "duckduckgo",
+        referrerPolicy: "no-referrer",
       }));
     console.log(`[images] DDG found ${results.length} images for "${q}"`);
     return results;
@@ -117,10 +142,11 @@ async function bingImages(q) {
         if (!j.murl || !isValidImageUrl(j.murl)) continue;
         out.push({
           title: stripTags(j.t || ""),
-          thumbnail: j.turl || j.murl,
-          image: j.murl,
+          thumbnail: normaliseThumbnail(j.turl || j.murl),
+          image: normaliseThumbnail(j.murl),
           source: j.purl,
           engine: "bing",
+          referrerPolicy: "no-referrer",
         });
       } catch { /* ignore malformed JSON */ }
       if (out.length >= 40) break;
@@ -131,7 +157,7 @@ async function bingImages(q) {
       let m;
       while ((m = mImgRe.exec(html)) !== null && out.length < 40) {
         if (isValidImageUrl(m[1])) {
-          out.push({ title: "", thumbnail: m[2] || m[1], image: m[1], source: m[1], engine: "bing" });
+          out.push({ title: "", thumbnail: normaliseThumbnail(m[2] || m[1]), image: normaliseThumbnail(m[1]), source: m[1], engine: "bing", referrerPolicy: "no-referrer" });
         }
       }
     }

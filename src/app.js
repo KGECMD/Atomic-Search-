@@ -366,10 +366,12 @@ function levenshtein(a, b) {
   return row[n];
 }
 
-// Domain authority tiers — tier 1 gets +2, tier 2 gets +1.
+// Domain authority tiers — tier 1 gets +2.5, tier 2 gets +1.5, tier 3 gets +0.8.
 // Anchored to the full hostname so "fakewikipedia.org" never matches.
-const AUTH_TIER1 = /^(en\.wikipedia\.org|wikipedia\.org|github\.com|mozilla\.org|developer\.mozilla\.org|mdn\.io|stackoverflow\.com|archive\.org|stackexchange\.com|rust-lang\.org|doc\.rust-lang\.org|cppreference\.com|ecma-international\.org|whatwg\.org|w3\.org|rfc-editor\.org|datatracker\.ietf\.org|kernel\.org|pkg\.go\.dev|docs\.python\.org)$/;
-const AUTH_TIER2 = /^(wikibooks\.org|wikiquote\.org|news\.ycombinator\.com|reddit\.com|developer\.apple\.com|learn\.microsoft\.com|npmjs\.com|pypi\.org|arxiv\.org|wolframalpha\.com|britannica\.com|khanacademy\.org|nature\.com|science\.org|nytimes\.com|bbc\.com|bbc\.co\.uk|theguardian\.com|reuters\.com|apnews\.com|nasa\.gov|who\.int|cdc\.gov|nih\.gov|medium\.com|dev\.to)$/;
+// Expanded to include more tech/reference/educational domains.
+const AUTH_TIER1 = /^(en\.wikipedia\.org|wikipedia\.org|github\.com|mozilla\.org|developer\.mozilla\.org|mdn\.io|stackoverflow\.com|archive\.org|stackexchange\.com|rust-lang\.org|doc\.rust-lang\.org|cppreference\.com|ecma-international\.org|whatwg\.org|w3\.org|rfc-editor\.org|datatracker\.ietf\.org|kernel\.org|pkg\.go\.dev|docs\.python\.org|docs\.rs|crates\.io|go\.dev|nodejs\.org|deno\.land|bun\.sh|react\.dev|vuejs\.org|svelte\.dev|angular\.io|typescriptlang\.org|developer\.chrome\.com|web\.dev|css-tricks\.com|smashingmagazine\.com)$/;
+const AUTH_TIER2 = /^(wikibooks\.org|wikiquote\.org|news\.ycombinator\.com|reddit\.com|developer\.apple\.com|learn\.microsoft\.com|npmjs\.com|pypi\.org|arxiv\.org|wolframalpha\.com|britannica\.com|khanacademy\.org|nature\.com|science\.org|nytimes\.com|bbc\.com|bbc\.co\.uk|theguardian\.com|reuters\.com|apnews\.com|nasa\.gov|who\.int|cdc\.gov|nih\.gov|medium\.com|dev\.to|hashnode\.com|freecodecamp\.org|digitalocean\.com|linode\.com|cloudflare\.com|vercel\.com|netlify\.com|heroku\.com|fly\.io|railway\.app)$/;
+const AUTH_TIER3 = /^(stackoverflow\.blog|github\.blog|engineering\.fb\.com|engineering\.atspotify\.com|netflixtechblog\.com|aws\.amazon\.com|cloud\.google\.com|azure\.microsoft\.com|docs\.docker\.com|kubernetes\.io|helm\.sh|grafana\.com|prometheus\.io|opentelemetry\.io|owasp\.org|cve\.mitre\.org|nvd\.nist\.gov)$/;
 
 
 // Query intent detection — more precise regexes to avoid over-matching.
@@ -484,21 +486,53 @@ function scoreOwnIndexRow(row, query) {
   if (titleHits === denom && titleLen <= denom * 3) score += 1.5;
 
   // ── Domain authority tiers ──────────────────────────────────────────────
-  if (AUTH_TIER1.test(host)) score += 2;
-  else if (AUTH_TIER2.test(host)) score += 1;
+  if (AUTH_TIER1.test(host)) score += 2.5;
+  else if (AUTH_TIER2.test(host)) score += 1.5;
+  else if (AUTH_TIER3.test(host)) score += 0.8;
+
+  // ── Semantic similarity: token overlap between title and query ──────────
+  // Reward pages where the title tokens are a tight semantic match to the
+  // query — not just coverage but also the ratio of title words that are
+  // query words (precision, not just recall).
+  if (titleHits > 0 && titleLen > 0) {
+    const titlePrecision = titleHits / titleLen;
+    const titleRecall = titleHits / denom;
+    // F1-like harmonic mean of precision and recall, scaled to 0..1.
+    const f1 = titlePrecision + titleRecall > 0
+      ? (2 * titlePrecision * titleRecall) / (titlePrecision + titleRecall)
+      : 0;
+    score += f1 * 2.0;
+  }
+
+  // ── Content quality signals ─────────────────────────────────────────────
+  // Reward pages with structured, substantive content. Penalise thin stubs.
+  const wordCount = (row.text || "").split(/\s+/).filter(Boolean).length;
+  if (wordCount >= 800) score += 0.6;       // long-form content
+  else if (wordCount >= 300) score += 0.3;  // decent article
+  else if (wordCount < 80) score -= 0.4;    // thin stub
+
+  // Reward pages that have a meaningful title (not just a URL slug).
+  const titleWordCount = title.split(/\s+/).filter(Boolean).length;
+  if (titleWordCount >= 4 && titleWordCount <= 15) score += 0.3; // well-formed title
+
+  // ── Multi-word query bonus ──────────────────────────────────────────────
+  // Multi-word queries that match well deserve an extra boost because they
+  // are more specific and harder to satisfy by accident.
+  if (effTokens.length >= 3 && titleCoverage >= 0.8) score += 1.2;
+  else if (effTokens.length >= 2 && titleCoverage === 1) score += 0.6;
 
   // ── Linear freshness bonus ──────────────────────────────────────────────
-  // Gentle linear decay: +1.0 for brand-new, tapering to 0 at 90 days.
-  // Pages older than 180 days get a small penalty. Exponential decay was
-  // too aggressive and unfairly buried older-but-relevant content.
+  // Very gentle decay: +1.0 for brand-new, tapering to 0 at 120 days.
+  // Pages older than 365 days get only a tiny penalty — old content that
+  // is highly relevant should still rank well (e.g. reference docs).
   const age = Math.max(0, Date.now() - (row.indexed_at || 0));
   const ageDays = age / (24 * 3600 * 1000);
   if (ageDays < 1) {
     score += 1.0; // very fresh
-  } else if (ageDays < 90) {
-    score += Math.max(0, 1.0 - ageDays / 90); // linear 1.0 → 0 over 90 days
-  } else if (ageDays >= 180) {
-    score -= 0.3; // mild stale penalty (was -0.5, too harsh)
+  } else if (ageDays < 120) {
+    score += Math.max(0, 1.0 - ageDays / 120); // linear 1.0 → 0 over 120 days
+  } else if (ageDays >= 365) {
+    score -= 0.2; // very mild stale penalty — relevance beats recency for reference content
   }
 
   // ── Keyword density normalisation ───────────────────────────────────────
@@ -518,9 +552,15 @@ function scoreOwnIndexRow(row, query) {
   }
 
   // ── Snippet quality: reward longer, richer bodies ───────────────────────
+  // Use character length as a proxy for content richness. Thin pages
+  // (login walls, error pages, stubs) get a mild penalty; rich pages get
+  // a small bonus. The word-count signal above already handles this at a
+  // coarser level; this adds a fine-grained character-level signal.
   const bodyLen = (row.text || "").length;
-  if (bodyLen < 400) score -= 0.5;
-  else if (bodyLen > 2000) score += 0.3;
+  if (bodyLen < 200) score -= 0.6;
+  else if (bodyLen < 400) score -= 0.2;
+  else if (bodyLen > 3000) score += 0.4;
+  else if (bodyLen > 1500) score += 0.2;
 
   return score;
 }

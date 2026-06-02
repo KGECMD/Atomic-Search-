@@ -781,10 +781,13 @@
       if (!items.length) { $("images-grid").innerHTML = '<p class="empty">No images.</p>'; return; }
       $("images-grid").innerHTML = items.map(function (img) {
         var viewUrl = "/go?url=" + encodeURIComponent(img.source || img.image);
+        var thumbSrc = img.thumbnail || img.image;
         return (
-          '<a href="' + esc(viewUrl) + '" target="_top" rel="noreferrer noopener">' +
-          '  <img loading="lazy" src="' + esc(img.thumbnail || img.image) + '" alt="' + esc(img.title || "") + '">' +
-          (img.title ? '<span class="caption">' + esc(img.title) + "</span>" : "") +
+          '<a href="' + esc(viewUrl) + '" target="_top" rel="noreferrer noopener" class="img-card">' +
+          '  <img loading="lazy" decoding="async" src="' + esc(thumbSrc) + '" alt="' + esc(img.title || "") + '"' +
+          '    referrerpolicy="no-referrer"' +
+          '    onerror="this.onerror=null;this.style.background=\'#333\';this.alt=\'Image unavailable\'">' +
+          (img.title ? '<span class="caption">' + esc(img.title.slice(0, 60)) + "</span>" : "") +
           "</a>"
         );
       }).join("");
@@ -1060,5 +1063,259 @@
         if (el) el.focus();
       }
     });
+
+    // ── Dark mode toggle ──────────────────────────────────────────────────
+    var dmToggle = $("dark-mode-toggle");
+    if (dmToggle) {
+      dmToggle.addEventListener("click", function () {
+        var current = document.body.dataset.theme || "atom-dark";
+        var lightThemes = ["atom-light","google","solar","pastel","arctic","sunrise","paper","mint","lavender",
+          "solarized-light","github-light","candy","paper-white","mint-cream","catppuccin-latte","notion",
+          "spring","winter","calm","zen","brutalist","grayscale","glassmorphism","neumorphism","soft-pastel",
+          "minimalist-pure","cool-mint","zen-garden"];
+        var isLight = lightThemes.indexOf(current) !== -1;
+        var next = isLight ? "atom-dark" : "atom-light";
+        document.body.dataset.theme = next;
+        try { localStorage.setItem("atomic.theme", next); } catch (e) { /* ignore */ }
+        var sel = $("theme");
+        if (sel) sel.value = next;
+        showToast(isLight ? "Switched to dark mode" : "Switched to light mode");
+      });
+    }
+
+    // ── "I'm Feeling Lucky" button ────────────────────────────────────────
+    var luckyBtn = $("lucky-btn");
+    if (luckyBtn) {
+      luckyBtn.addEventListener("click", function () {
+        var q = ($("q-hero") || $("q") || {}).value || "";
+        if (!q.trim()) { showToast("Type something first!"); return; }
+        fetch("/api/search?q=" + encodeURIComponent(q.trim()) + "&per_page=1")
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            var top = d && d.results && d.results[0];
+            if (top && top.url) {
+              window.open(top.url, "_top");
+            } else {
+              showToast("No results found.");
+            }
+          })
+          .catch(function () { showToast("Could not fetch results."); });
+      });
+    }
+
+    // ── Export results button ─────────────────────────────────────────────
+    var exportBtn = $("export-btn");
+    if (exportBtn) {
+      exportBtn.addEventListener("click", function () {
+        var cards = document.querySelectorAll(".result[data-url]");
+        if (!cards.length) { showToast("No results to export."); return; }
+        var rows = [];
+        cards.forEach(function (c) {
+          var url = c.getAttribute("data-url") || "";
+          var title = (c.querySelector(".title") || {}).textContent || "";
+          var snippet = (c.querySelector(".snippet") || {}).textContent || "";
+          rows.push({ url: url, title: title.trim(), snippet: snippet.trim() });
+        });
+        var csv = "url,title,snippet\n" + rows.map(function (r) {
+          return [r.url, r.title, r.snippet].map(function (v) {
+            return '"' + v.replace(/"/g, '""') + '"';
+          }).join(",");
+        }).join("\n");
+        var blob = new Blob([csv], { type: "text/csv" });
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "atomic-results.csv";
+        a.click();
+        showToast("Results exported as CSV");
+      });
+    }
+
+    // Show export button when results are present.
+    var _origDoSearch = doSearch;
+    // (export btn visibility is handled in doSearch via a post-render hook below)
+
+    // ── Toast notification helper ─────────────────────────────────────────
+    function showToast(msg, durationMs) {
+      durationMs = durationMs || 2200;
+      var existing = document.querySelector(".atomic-toast");
+      if (existing) existing.remove();
+      var t = document.createElement("div");
+      t.className = "atomic-toast";
+      t.textContent = msg;
+      document.body.appendChild(t);
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          t.classList.add("atomic-toast-show");
+        });
+      });
+      setTimeout(function () {
+        t.classList.remove("atomic-toast-show");
+        setTimeout(function () { if (t.parentNode) t.remove(); }, 350);
+      }, durationMs);
+    }
+    // Expose globally so extras.js can use it.
+    window._atomicToast = showToast;
+
+    // ── Easter eggs ───────────────────────────────────────────────────────
+    // Konami code: ↑↑↓↓←→←→BA
+    (function () {
+      var KONAMI = ["ArrowUp","ArrowUp","ArrowDown","ArrowDown","ArrowLeft","ArrowRight","ArrowLeft","ArrowRight","b","a"];
+      var pos = 0;
+      document.addEventListener("keydown", function (e) {
+        if (e.key === KONAMI[pos]) {
+          pos++;
+          if (pos === KONAMI.length) {
+            pos = 0;
+            // Trigger rainbow flash + switch to quantum theme
+            document.body.classList.add("konami-flash");
+            setTimeout(function () { document.body.classList.remove("konami-flash"); }, 2100);
+            document.body.dataset.theme = "quantum";
+            try { localStorage.setItem("atomic.theme", "quantum"); } catch (e2) { /* ignore */ }
+            var sel = $("theme"); if (sel) sel.value = "quantum";
+            showToast("🎮 Konami Code! Quantum theme activated!");
+          }
+        } else {
+          pos = e.key === KONAMI[0] ? 1 : 0;
+        }
+      });
+    })();
+
+    // "spin" command — rotates the logo
+    // "flip" command — flips the page upside down
+    // These are handled in the search submit interceptor below.
+
+    // ── Search-time easter eggs (client-side intercept) ───────────────────
+    var _origSubmitQuery = null;
+    // We patch the submit handler by listening on the atomic:search event.
+    window.addEventListener("atomic:search", function (ev) {
+      var q = (ev.detail && ev.detail.q || "").trim().toLowerCase();
+
+      // "answer to life the universe and everything"
+      if (q === "answer to life the universe and everything" || q === "meaning of life") {
+        setTimeout(function () {
+          var meta = $("search-meta");
+          if (meta) {
+            meta.hidden = false;
+            meta.innerHTML = '<span style="font-size:18px;font-weight:700;color:var(--accent)">42</span>' +
+              '<span class="dot"></span><span style="color:var(--text-dim)">The answer to life, the universe, and everything.</span>';
+          }
+        }, 100);
+        return;
+      }
+
+      // "recursion"
+      if (q === "recursion") {
+        setTimeout(function () {
+          var dym = document.querySelector(".did-you-mean");
+          if (!dym) {
+            var r = $("results");
+            if (r) {
+              var p = document.createElement("p");
+              p.className = "did-you-mean";
+              p.innerHTML = 'Did you mean <a href="#" data-dym="recursion">recursion</a>?';
+              r.insertBefore(p, r.firstChild);
+            }
+          }
+        }, 300);
+        return;
+      }
+
+      // "sudo make me a sandwich"
+      if (q === "sudo make me a sandwich") {
+        setTimeout(function () {
+          showToast("🥪 Okay. (You did say sudo.)", 4000);
+        }, 200);
+        return;
+      }
+
+      // "the cake is a lie"
+      if (q === "the cake is a lie") {
+        setTimeout(function () {
+          showToast("🎂 The cake is a lie. But the search results are real.", 4000);
+        }, 200);
+        return;
+      }
+
+      // "all your base are belong to us"
+      if (q === "all your base are belong to us") {
+        setTimeout(function () {
+          showToast("🚀 All your base are belong to Atomic Search.", 4000);
+        }, 200);
+        return;
+      }
+
+      // "spin" — spin the logo
+      if (q === "spin") {
+        var home = $("home");
+        if (home) home.classList.toggle("logo-spinning");
+        showToast("🌀 Spin mode " + (home && home.classList.contains("logo-spinning") ? "on" : "off"));
+        return;
+      }
+
+      // "flip" — flip the page
+      if (q === "flip") {
+        document.body.classList.toggle("page-flipped");
+        showToast("🙃 Page " + (document.body.classList.contains("page-flipped") ? "flipped!" : "unflipped!"));
+        return;
+      }
+    });
+
+    // ── Developer mode (Ctrl+Shift+D) ─────────────────────────────────────
+    var devMode = false;
+    document.addEventListener("keydown", function (e) {
+      if (e.ctrlKey && e.shiftKey && e.key === "D") {
+        e.preventDefault();
+        devMode = !devMode;
+        var badge = $("dev-mode-badge");
+        if (devMode) {
+          if (!badge) {
+            badge = document.createElement("div");
+            badge.id = "dev-mode-badge";
+            badge.textContent = "⚙ Dev Mode";
+            document.body.appendChild(badge);
+          }
+          badge.hidden = false;
+          showToast("🛠 Developer mode enabled. Check console for ranking logs.");
+          console.log("[atomic:dev] Developer mode ON. Ranking logs will appear for each search.");
+        } else {
+          if (badge) badge.hidden = true;
+          showToast("Developer mode disabled.");
+        }
+      }
+    });
+
+    // ── Show export button after search ───────────────────────────────────
+    // Patch doSearch to show the export button after results render.
+    var _exportPatchDone = false;
+    if (!_exportPatchDone && exportBtn) {
+      _exportPatchDone = true;
+      var _origDoSearchFn = doSearch;
+      // We can't easily patch doSearch since it's a closure, but we can
+      // listen for the results container being populated.
+      var resultsEl = $("results");
+      if (resultsEl) {
+        var _obs = new MutationObserver(function () {
+          var hasResults = resultsEl.querySelectorAll(".result[data-url]").length > 0;
+          exportBtn.hidden = !hasResults;
+        });
+        _obs.observe(resultsEl, { childList: true });
+      }
+    }
+
+    // ── Random theme on first visit ───────────────────────────────────────
+    (function () {
+      try {
+        var firstVisit = !localStorage.getItem("atomic.theme") && !localStorage.getItem("atomic.visited");
+        if (firstVisit) {
+          localStorage.setItem("atomic.visited", "1");
+          var funThemes = ["quantum","synthwave","aurora","cyberpunk","matrix","obsidian","plasma","vaporwave","neon","dracula"];
+          var pick = funThemes[Math.floor(Math.random() * funThemes.length)];
+          document.body.dataset.theme = pick;
+          localStorage.setItem("atomic.theme", pick);
+          var sel = $("theme"); if (sel) sel.value = pick;
+        }
+      } catch (e) { /* ignore */ }
+    })();
+
   });
 })();
