@@ -1,0 +1,270 @@
+/* ============================================================================
+   ATOMIC SEARCH — THEME PICKER & EASTER EGG UI
+   ============================================================================ */
+
+/* ─────────────────────────────────────────────────────────────────────────
+   THEME PICKER MODAL
+   ───────────────────────────────────────────────────────────────────────── */
+.theme-picker {
+  position: fixed;
+  bottom: 80px;
+  right: 20px;
+  z-index: 1000;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  max-width: 320px;
+  max-height: 500px;
+  overflow-y: auto;
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.theme-picker[hidden] {
+  display: none;
+}
+
+.theme-picker-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  border-bottom: 1px solid var(--border-soft);
+  position: sticky;
+  top: 0;
+  background: var(--bg-elev);
+  z-index: 1001;
+}
+
+.theme-picker-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.theme-picker-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.theme-picker-close:hover {
+  background: var(--bg-elev-1);
+  color: var(--text);
+}
+
+.theme-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  padding: 12px;
+}
+
+.theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px;
+  background: var(--bg);
+  border: 2px solid var(--border-soft);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.theme-option:hover {
+  background: var(--bg-elev-1);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.theme-option.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+.theme-icon {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.theme-label {
+  text-align: center;
+  word-break: break-word;
+}
+
+.theme-picker-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--bg);
+  font-size: 11px;
+  color: var(--text-mute);
+  text-align: center;
+}
+
+.theme-picker-footer p {
+  margin: 0;
+  line-height: 1.4;
+}
+
+.theme-picker-footer kbd {
+  background: var(--bg-elev-1);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-family: monospace;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   EASTER EGG NOTIFICATIONS
+   ───────────────────────────────────────────────────────────────────────── */
+.easter-egg-notification {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2000;
+  background: var(--accent);
+  color: var(--bg);
+  padding: 12px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  opacity: 0;
+  transition: opacity 0.3s ease-out;
+  pointer-events: none;
+}
+
+.easter-egg-notification.show {
+  opacity: 1;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   RAINBOW MODE ANIMATION
+   ───────────────────────────────────────────────────────────────────────── */
+@keyframes rainbow {
+  0% {
+    filter: hue-rotate(0deg);
+  }
+  100% {
+    filter: hue-rotate(360deg);
+  }
+}
+
+body.rainbow-mode {
+  animation: rainbow 3s linear infinite;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   THEME PICKER BUTTON (in topbar)
+   ───────────────────────────────────────────────────────────────────────── */
+.theme-toggle-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+  font-size: 18px;
+}
+
+.theme-toggle-btn:hover {
+  background: var(--bg-elev-1);
+  color: var(--text);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   RESPONSIVE ADJUSTMENTS
+   ───────────────────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .theme-picker {
+    bottom: 70px;
+    right: 10px;
+    left: 10px;
+    max-width: none;
+  }
+
+  .theme-picker-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .theme-option {
+    padding: 10px;
+    font-size: 11px;
+  }
+
+  .theme-icon {
+    font-size: 20px;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   ACCESSIBILITY: REDUCED MOTION
+   ───────────────────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .theme-picker,
+  .easter-egg-notification {
+    animation: none;
+    transition: none;
+  }
+
+  body.rainbow-mode {
+    animation: none;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   DARK MODE SPECIFIC ADJUSTMENTS
+   ───────────────────────────────────────────────────────────────────────── */
+@media (prefers-color-scheme: dark) {
+  .theme-picker {
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   PRINT STYLES
+   ───────────────────────────────────────────────────────────────────────── */
+@media print {
+  .theme-picker,
+  .easter-egg-notification,
+  .theme-toggle-btn {
+    display: none !important;
+  }
+}
+
