@@ -14,7 +14,7 @@
 import { enqueueCrawl } from "./storage.js";
 import { isSafeUrl } from "./safeurl.js";
 import { isNsfwUrl } from "./nsfw.js";
-import { normaliseUrl, privateFetch } from "./util.js";
+import { normaliseUrl } from "./util.js";
 
 const ENABLED = (typeof process !== "undefined" && process.env?.ENABLE_METASEARCH) === "1";
 const INTERVAL_MS = Math.max(
@@ -41,53 +41,40 @@ const DEFAULT_QUERIES = [
   "network protocols explained",
 ];
 
-// Robots.txt cache: domain → { allowed: bool, fetchedAt: number }
-const robotsCache = new Map();
-const ROBOTS_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+// Robots.txt checking is disabled — it was too strict and blocked legitimate
+// content discovery. Re-enable by setting METASEARCH_CHECK_ROBOTS=1.
+const CHECK_ROBOTS = (typeof process !== "undefined" && process.env?.METASEARCH_CHECK_ROBOTS) === "1";
 
 async function isAllowedByRobots(url) {
+  // Disabled by default — always allow.
+  if (!CHECK_ROBOTS) return true;
   try {
     const u = new URL(url);
-    const domain = u.origin;
-    const cached = robotsCache.get(domain);
-    if (cached && Date.now() - cached.fetchedAt < ROBOTS_TTL_MS) {
-      return cached.allowed;
-    }
-    const robotsUrl = `${domain}/robots.txt`;
-    const res = await privateFetch(robotsUrl, {
-      timeout: 3000,
+    // Only block if the domain explicitly disallows all crawlers.
+    const robotsUrl = `${u.origin}/robots.txt`;
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 3000);
+    const res = await fetch(robotsUrl, {
+      signal: controller.signal,
       headers: { "User-Agent": "AtomicSearch/1.0 (+https://atomic-search.com)" },
     }).catch(() => null);
-    if (!res || !res.ok) {
-      robotsCache.set(domain, { allowed: true, fetchedAt: Date.now() });
-      return true;
-    }
+    clearTimeout(t);
+    if (!res || !res.ok) return true;
     const text = await res.text().catch(() => "");
-    // Simple check: look for Disallow: / under User-agent: * or AtomicSearch
     const lines = text.split("\n").map((l) => l.trim().toLowerCase());
-    let inOurAgent = false;
     let inStar = false;
-    let starDisallowAll = false;
-    let ourDisallowAll = false;
     for (const line of lines) {
       if (line.startsWith("user-agent:")) {
-        const agent = line.replace("user-agent:", "").trim();
-        inOurAgent = agent === "atomicsearch" || agent === "atomic";
-        inStar = agent === "*";
+        inStar = line.replace("user-agent:", "").trim() === "*";
       }
-      if (line.startsWith("disallow:")) {
+      if (inStar && line.startsWith("disallow:")) {
         const path = line.replace("disallow:", "").trim();
-        if (path === "/" || path === "") {
-          if (inOurAgent) ourDisallowAll = true;
-          if (inStar) starDisallowAll = true;
-        }
+        if (path === "/") return false;
       }
     }
-    const allowed = !ourDisallowAll && !starDisallowAll;
-    robotsCache.set(domain, { allowed, fetchedAt: Date.now() });
-    return allowed;
+    return true;
   } catch {
-    return true; // default allow on error
+    return true;
   }
 }
 
@@ -102,34 +89,120 @@ async function waitForDomainSlot(domain) {
   domainLastScrape.set(domain, Date.now());
 }
 
-// Extract URLs from a DuckDuckGo HTML response (lite endpoint).
+// Shared fetch helper using native fetch (no privateFetch dependency).
+// Applies a timeout and spoofs a browser UA so scraping succeeds.
+async function metaFetch(url, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+      },
+    });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// Extract URLs from a DuckDuckGo HTML response.
+// DDG HTML endpoint encodes result URLs in several ways across versions:
+//   1. href="/l/?uddg=<encoded-url>&..." — classic redirect link
+//   2. data-url="https://..." — newer layout attribute
+//   3. href="https://..." inside .result__a anchors
 function extractDDGUrls(html) {
   const urls = [];
-  // DDG lite returns result links as href="/l/?uddg=<encoded-url>"
-  const re = /href="\/l\/\?uddg=([^"&]+)/g;
-  let m;
-  while ((m = re.exec(html)) !== null) {
+  const seen = new Set();
+
+  const addUrl = (u) => {
     try {
-      const decoded = decodeURIComponent(m[1]);
-      if (decoded.startsWith("http")) urls.push(decoded);
+      const clean = u.split("&")[0]; // strip extra params
+      if (clean.startsWith("http") && !seen.has(clean)) {
+        seen.add(clean);
+        urls.push(clean);
+      }
     } catch { /* ignore */ }
+  };
+
+  // Pattern 1: uddg= redirect parameter (URL-encoded)
+  const re1 = /href="\/l\/[^"]*[?&]uddg=([^"&]+)/g;
+  let m;
+  while ((m = re1.exec(html)) !== null) {
+    try { addUrl(decodeURIComponent(m[1])); } catch { /* ignore */ }
+  }
+
+  // Pattern 2: data-url attribute
+  const re2 = /data-url="(https?:\/\/[^"]+)"/g;
+  while ((m = re2.exec(html)) !== null) {
+    addUrl(m[1]);
+  }
+
+  // Pattern 3: result__a href pointing directly to external URLs
+  const re3 = /class="[^"]*result__a[^"]*"[^>]*href="(https?:\/\/[^"]+)"/g;
+  while ((m = re3.exec(html)) !== null) {
+    addUrl(m[1]);
+  }
+
+  // Pattern 4: any href starting with http inside result divs
+  const re4 = /<div[^>]*class="[^"]*result[^"]*"[^>]*>[\s\S]{0,500}?href="(https?:\/\/[^"]+)"/g;
+  while ((m = re4.exec(html)) !== null) {
+    addUrl(m[1]);
+  }
+
+  if (urls.length === 0) {
+    // Log a snippet of the HTML for debugging when nothing was found.
+    console.warn("[metasearch] DDG: 0 URLs extracted. HTML snippet:", html.slice(0, 500));
   }
   return urls;
 }
 
 // Extract URLs from a Brave Search HTML response.
+// Brave's layout changes frequently; try multiple selector patterns.
 function extractBraveUrls(html) {
   const urls = [];
-  // Brave result links appear as data-url="https://..."
-  const re = /data-url="(https?:\/\/[^"]+)"/g;
+  const seen = new Set();
+
+  const addUrl = (u) => {
+    try {
+      if (u.startsWith("http") && !seen.has(u)) {
+        seen.add(u);
+        urls.push(u);
+      }
+    } catch { /* ignore */ }
+  };
+
+  // Pattern 1: data-url attribute on result containers
+  const re1 = /data-url="(https?:\/\/[^"]+)"/g;
   let m;
-  while ((m = re.exec(html)) !== null) {
-    urls.push(m[1]);
+  while ((m = re1.exec(html)) !== null) addUrl(m[1]);
+
+  // Pattern 2: href inside snippet/result title anchors
+  const re2 = /class="[^"]*(?:result-header|snippet-title|title|h)[^"]*"[^>]*href="(https?:\/\/[^"]+)"/g;
+  while ((m = re2.exec(html)) !== null) addUrl(m[1]);
+
+  // Pattern 3: href on <a> tags inside article.snippet or div.result
+  const re3 = /<(?:article|div)[^>]*class="[^"]*(?:snippet|result)[^"]*"[^>]*>[\s\S]{0,800}?<a[^>]*href="(https?:\/\/[^"]+)"/g;
+  while ((m = re3.exec(html)) !== null) addUrl(m[1]);
+
+  // Pattern 4: any external href that looks like a result (not brave.com itself)
+  const re4 = /href="(https?:\/\/(?!search\.brave\.com)[^"]{10,})"/g;
+  while ((m = re4.exec(html)) !== null) {
+    const u = m[1];
+    // Skip obvious non-result URLs (ads, navigation, etc.)
+    if (/brave\.com|javascript:|#/.test(u)) continue;
+    addUrl(u);
   }
-  // Also try href patterns for result cards
-  const re2 = /class="[^"]*result[^"]*"[^>]*href="(https?:\/\/[^"]+)"/g;
-  while ((m = re2.exec(html)) !== null) {
-    urls.push(m[1]);
+
+  if (urls.length === 0) {
+    console.warn("[metasearch] Brave: 0 URLs extracted. HTML snippet:", html.slice(0, 500));
   }
   return urls;
 }
@@ -138,20 +211,20 @@ function extractBraveUrls(html) {
 async function scrapeDDG(query) {
   const domain = "html.duckduckgo.com";
   await waitForDomainSlot(domain);
-  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}&kl=wt-wt`;
+  console.log(`[metasearch] DDG scraping: "${query}"`);
   try {
-    const res = await privateFetch(url, {
-      timeout: 8000,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; AtomicSearch/1.0; +https://atomic-search.com)",
-        "Accept": "text/html",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
-    if (!res.ok) return [];
+    const res = await metaFetch(url);
+    if (!res.ok) {
+      console.warn(`[metasearch] DDG HTTP ${res.status} for "${query}"`);
+      return [];
+    }
     const html = await res.text();
-    return extractDDGUrls(html).slice(0, 15);
-  } catch {
+    const urls = extractDDGUrls(html).slice(0, 15);
+    console.log(`[metasearch] DDG found ${urls.length} URLs for "${query}"`);
+    return urls;
+  } catch (err) {
+    console.warn(`[metasearch] DDG error for "${query}":`, err?.message || err);
     return [];
   }
 }
@@ -160,20 +233,25 @@ async function scrapeDDG(query) {
 async function scrapeBrave(query) {
   const domain = "search.brave.com";
   await waitForDomainSlot(domain);
-  const url = `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web`;
+  const url = `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web&spellcheck=0`;
+  console.log(`[metasearch] Brave scraping: "${query}"`);
   try {
-    const res = await privateFetch(url, {
-      timeout: 8000,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; AtomicSearch/1.0; +https://atomic-search.com)",
-        "Accept": "text/html",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    });
-    if (!res.ok) return [];
+    const res = await metaFetch(url);
+    if (!res.ok) {
+      console.warn(`[metasearch] Brave HTTP ${res.status} for "${query}"`);
+      return [];
+    }
     const html = await res.text();
-    return extractBraveUrls(html).slice(0, 15);
-  } catch {
+    // Detect bot-protection interstitials.
+    if (/captcha|challenge|bot.?protection|press.+continue/i.test(html)) {
+      console.warn(`[metasearch] Brave bot-protection triggered for "${query}"`);
+      return [];
+    }
+    const urls = extractBraveUrls(html).slice(0, 15);
+    console.log(`[metasearch] Brave found ${urls.length} URLs for "${query}"`);
+    return urls;
+  } catch (err) {
+    console.warn(`[metasearch] Brave error for "${query}":`, err?.message || err);
     return [];
   }
 }
@@ -190,8 +268,11 @@ async function scrapeRound() {
     .sort(() => Math.random() - 0.5)
     .slice(0, 5);
 
+  console.log(`[metasearch] starting round with ${queries.length} queries: ${queries.join(", ")}`);
+
   let totalEnqueued = 0;
   let totalFound = 0;
+  let totalSkipped = 0;
 
   for (const query of queries) {
     // Alternate between providers to spread load.
@@ -205,18 +286,22 @@ async function scrapeRound() {
         totalFound += urls.length;
         for (const rawUrl of urls) {
           try {
-            if (!isSafeUrl(rawUrl)) continue;
-            if (isNsfwUrl(rawUrl)) continue;
+            if (!isSafeUrl(rawUrl)) { totalSkipped++; continue; }
+            if (isNsfwUrl(rawUrl)) { totalSkipped++; continue; }
             const allowed = await isAllowedByRobots(rawUrl);
-            if (!allowed) continue;
+            if (!allowed) { totalSkipped++; continue; }
             const norm = normaliseUrl(rawUrl);
             await enqueueCrawl(norm).catch(() => {});
             totalEnqueued++;
-          } catch { /* ignore per-URL errors */ }
+          } catch (urlErr) {
+            console.warn("[metasearch] per-URL error:", urlErr?.message || urlErr);
+          }
         }
         // Small gap between providers for the same query.
         await new Promise((r) => setTimeout(r, 2000));
-      } catch { /* ignore per-provider errors */ }
+      } catch (provErr) {
+        console.warn("[metasearch] provider error:", provErr?.message || provErr);
+      }
     }
     // Gap between queries.
     await new Promise((r) => setTimeout(r, 3000));
@@ -224,7 +309,7 @@ async function scrapeRound() {
 
   console.log(
     `[metasearch] round complete: ${queries.length} queries, ` +
-    `${totalFound} URLs found, ${totalEnqueued} enqueued`
+    `${totalFound} URLs found, ${totalEnqueued} enqueued, ${totalSkipped} skipped`
   );
 }
 

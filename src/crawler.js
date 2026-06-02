@@ -235,19 +235,50 @@ export function startCrawler(intervalMs = 1000) {
   if (typeof process === "undefined" || !process.versions?.node) return;
   if (running) return;
   running = true;
-  // Seed a few trusted hubs ~2s after boot so the crawler has something to
-  // chew on immediately.
-  setTimeout(() => { seedIfEmpty().catch(() => {}); }, 2000).unref?.();
+
+  console.log("[crawler] starting — concurrency=" + CONCURRENCY + " per_host=" + PER_HOST);
+
+  // Seed a few trusted hubs immediately (not delayed) so the crawler has
+  // something to chew on right after index restore.
+  seedIfEmpty().catch(() => {});
 
   let inFlight = 0;
   let pumpErrors = 0; // v3: self-healing crash-loop guard
+  let totalCrawled = 0;
+  let crawledThisPeriod = 0;
+
+  // Queue depth + health logging every 30 seconds.
+  const queueHealthTimer = setInterval(async () => {
+    try {
+      const s = await stats();
+      const queueDepth = s?.queue || 0;
+      const rate = crawledThisPeriod;
+      crawledThisPeriod = 0;
+      if (queueDepth > 0 || rate > 0) {
+        console.log(
+          `[crawler] queue=${queueDepth} in-flight=${inFlight} ` +
+          `crawled_30s=${rate} total=${totalCrawled} heap=${heapMb().toFixed(0)}MB`
+        );
+      }
+      // Warn if queue is growing faster than it's being consumed.
+      if (queueDepth > 10000 && rate < 5) {
+        console.warn(`[crawler] queue health warning: depth=${queueDepth} but only ${rate} crawled in last 30s`);
+      }
+    } catch { /* ignore */ }
+  }, 30_000);
+  queueHealthTimer.unref?.();
+
+  // Process up to BATCH_SIZE tasks per pump tick instead of 1.
+  const BATCH_SIZE = 5;
+
   const pump = async () => {
     // Pause crawling if heap is under pressure to avoid OOM on free-tier.
     if (checkMemoryPressure()) return;
-    while (inFlight < CONCURRENCY) {
+    let taken = 0;
+    while (inFlight < CONCURRENCY && taken < BATCH_SIZE) {
       let task = null;
       try { task = await nextCrawlTask(); } catch { task = null; }
-      if (!task) return;
+      if (!task) break;
       const host = hostFromUrl(task.url) || "unknown";
       // Only take the task if there's an open slot for this host; otherwise
       // put it back and try the next one. `nextCrawlTask` already marks the
@@ -260,23 +291,41 @@ export function startCrawler(intervalMs = 1000) {
         continue;
       }
       inFlight += 1;
-      crawlTask(task).finally(() => { inFlight -= 1; });
+      taken += 1;
+      crawlTask(task).finally(() => {
+        inFlight -= 1;
+        totalCrawled += 1;
+        crawledThisPeriod += 1;
+      });
     }
   };
-  setInterval(() => {
+
+  // Run pump continuously — not just once per interval. If the pump finds
+  // work, schedule another pump immediately after a short yield; otherwise
+  // fall back to the interval timer. This ensures the queue is consumed
+  // as fast as possible without busy-looping.
+  const schedulePump = () => {
     pump().catch((err) => {
-      // v3 self-healing: count pump-level crashes. If we hit a run of
-      // >10 in 60s, back off for a cooldown so we don't burn CPU in a
-      // tight crash loop. Resets on any healthy tick.
       pumpErrors += 1;
       if (pumpErrors > 10) {
         console.error("[crawler] pump crash-loop, cooling down 30s:", err?.message || err);
-        pumpErrors = -30; // cool for ~30 ticks (~30s)
+        pumpErrors = -30;
       }
+    }).finally(() => {
+      if (pumpErrors < 0) pumpErrors += 1;
+      if (pumpErrors === 0) pumpErrors = 0;
     });
-    if (pumpErrors < 0) pumpErrors += 1; // bleed cool-down
-    if (pumpErrors === 0) pumpErrors = 0; // no-op clarity
-  }, intervalMs).unref?.();
+  };
+
+  // Primary interval — fires every intervalMs to keep the pump running.
+  setInterval(schedulePump, intervalMs).unref?.();
+
+  // Secondary fast-path: also pump immediately after each crawl completes
+  // so we don't wait a full second before picking up the next task.
+  // Achieved by scheduling an extra pump 50ms after each batch.
+  setInterval(() => {
+    if (inFlight < CONCURRENCY) schedulePump();
+  }, 200).unref?.();
 
   // v3 self-healing: convert stray unhandled rejections in crawler paths
   // into logged-and-forgotten. Previously one 429 without a catch could

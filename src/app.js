@@ -177,8 +177,15 @@ function growIndex(
 // after the eager crawl without duplicating the scoring/shaping logic.
 async function buildOwnResults(q) {
   const ownRaw = await searchPages(q, 30).catch(() => []);
-  return ownRaw.map((p) => {
-    const score = scoreOwnIndexRow(p, q);
+  // Sort by score first so scoreAndLog can log the actual top-3.
+  const scored = ownRaw.map((p) => ({ p, score: scoreOwnIndexRow(p, q) }));
+  scored.sort((a, b) => b.score - a.score);
+  // Log top-3 for debugging (scoreAndLog tracks last-logged query to avoid spam).
+  scored.slice(0, 3).forEach(({ p, score }, i) => {
+    if (i === 0) _lastLoggedQuery = ""; // reset so next call logs fresh
+    scoreAndLog(p, q, i);
+  });
+  return scored.map(({ p, score }) => {
     const titleHit =
       (p.title || "").toLowerCase().includes((q || "").toLowerCase()) ||
       (q || "")
@@ -360,29 +367,32 @@ function levenshtein(a, b) {
 }
 
 // Domain authority tiers — tier 1 gets +2, tier 2 gets +1.
-const AUTH_TIER1 = /(^|\.)(wikipedia\.org|github\.com|mozilla\.org|developer\.mozilla\.org|mdn\.io|stackoverflow\.com|archive\.org)$/;
-const AUTH_TIER2 = /(^|\.)(wikibooks\.org|wikiquote\.org|news\.ycombinator\.com|reddit\.com|docs\.python\.org|developer\.apple\.com|learn\.microsoft\.com|npmjs\.com|pypi\.org)$/;
+// Anchored to the full hostname so "fakewikipedia.org" never matches.
+const AUTH_TIER1 = /^(en\.wikipedia\.org|wikipedia\.org|github\.com|mozilla\.org|developer\.mozilla\.org|mdn\.io|stackoverflow\.com|archive\.org|stackexchange\.com|rust-lang\.org|doc\.rust-lang\.org|cppreference\.com|ecma-international\.org|whatwg\.org|w3\.org|rfc-editor\.org|datatracker\.ietf\.org|kernel\.org|pkg\.go\.dev|docs\.python\.org)$/;
+const AUTH_TIER2 = /^(wikibooks\.org|wikiquote\.org|news\.ycombinator\.com|reddit\.com|developer\.apple\.com|learn\.microsoft\.com|npmjs\.com|pypi\.org|arxiv\.org|wolframalpha\.com|britannica\.com|khanacademy\.org|nature\.com|science\.org|nytimes\.com|bbc\.com|bbc\.co\.uk|theguardian\.com|reuters\.com|apnews\.com|nasa\.gov|who\.int|cdc\.gov|nih\.gov|medium\.com|dev\.to)$/;
 
 
-
-// Query intent detection — boosts results that match the detected intent.
+// Query intent detection — more precise regexes to avoid over-matching.
 function detectQueryIntent(q) {
   const lower = q.toLowerCase();
-  if (/\b(how to|how do|tutorial|guide|step by step|learn|getting started)\b/.test(lower)) return "tutorial";
-  if (/\b(vs\.?|versus|compare|comparison|difference between|which is better)\b/.test(lower)) return "comparison";
-  if (/\b(what is|what are|define|definition|meaning of|explain)\b/.test(lower)) return "definition";
-  if (/\b(download|install|setup|configure|deploy)\b/.test(lower)) return "install";
-  if (/\b(error|fix|bug|issue|problem|not working|broken|crash)\b/.test(lower)) return "debug";
+  // Use word-boundary anchors and avoid matching partial words.
+  if (/(?:^|\s)(how to|how do i|tutorial|step.by.step|getting started)(?:\s|$)/.test(lower)) return "tutorial";
+  if (/(?:^|\s)(vs\.?|versus|compare|comparison|difference between|which is better)(?:\s|$)/.test(lower)) return "comparison";
+  if (/(?:^|\s)(what is|what are|define|definition of|meaning of|explain)(?:\s|$)/.test(lower)) return "definition";
+  if (/(?:^|\s)(how to install|download|setup guide|configure|deploy)(?:\s|$)/.test(lower)) return "install";
+  if (/(?:^|\s)(error|fix|debug|not working|broken|crash|exception)(?:\s|$)/.test(lower)) return "debug";
   return "general";
 }
 
 // Sliding-window proximity: count how many query tokens appear within
 // a window of `windowSize` words in the given text. Returns a 0..1 score.
+// Only applied when query has 3+ tokens to avoid false positives on short queries.
 function proximityScore(tokens, text, windowSize) {
   windowSize = windowSize || 10;
-  if (tokens.length < 2) return 0;
+  // Guard: only meaningful for multi-token queries on non-trivial text.
+  if (tokens.length < 3) return 0;
   const words = text.split(/\s+/);
-  if (words.length < 2) return 0;
+  if (words.length < 3) return 0;
   let maxHits = 0;
   const limit = Math.max(0, words.length - windowSize);
   for (let i = 0; i <= limit; i++) {
@@ -398,6 +408,7 @@ function proximityScore(tokens, text, windowSize) {
 
 // Keyword density: ratio of query-token occurrences to total word count.
 // Penalises keyword-stuffed pages and rewards focused content.
+// Healthy range: 0.5–10%. Stuffing (>20%) gets a small penalty.
 function keywordDensity(tokens, text) {
   if (!text || !tokens.length) return 0;
   const words = text.toLowerCase().split(/\s+/);
@@ -407,10 +418,10 @@ function keywordDensity(tokens, text) {
     if (tokens.some((t) => w.includes(t))) hits++;
   }
   const density = hits / words.length;
-  // Ideal density: 2–8%. Penalise stuffing (>15%) and thin content (<0.5%).
-  if (density > 0.15) return -0.5;
-  if (density < 0.005) return -0.2;
-  return Math.min(1.0, density * 8); // normalise to 0..1
+  // Penalise only extreme stuffing (>20%). Thin content (<0.5%) gets a tiny nudge down.
+  if (density > 0.20) return -0.3;
+  if (density < 0.005) return -0.1;
+  return Math.min(1.0, density * 10); // normalise to 0..1
 }
 
 function scoreOwnIndexRow(row, query) {
@@ -476,17 +487,18 @@ function scoreOwnIndexRow(row, query) {
   if (AUTH_TIER1.test(host)) score += 2;
   else if (AUTH_TIER2.test(host)) score += 1;
 
-  // ── Exponential freshness decay ─────────────────────────────────────────
-  // Score decays as: bonus = 1.0 * e^(-age / halfLife). Half-life = 30 days.
-  // Pages older than 180 days get a small penalty instead.
+  // ── Linear freshness bonus ──────────────────────────────────────────────
+  // Gentle linear decay: +1.0 for brand-new, tapering to 0 at 90 days.
+  // Pages older than 180 days get a small penalty. Exponential decay was
+  // too aggressive and unfairly buried older-but-relevant content.
   const age = Math.max(0, Date.now() - (row.indexed_at || 0));
   const ageDays = age / (24 * 3600 * 1000);
   if (ageDays < 1) {
     score += 1.0; // very fresh
-  } else if (ageDays < 180) {
-    score += Math.exp(-ageDays / 30) * 1.0;
-  } else {
-    score -= 0.5; // stale penalty
+  } else if (ageDays < 90) {
+    score += Math.max(0, 1.0 - ageDays / 90); // linear 1.0 → 0 over 90 days
+  } else if (ageDays >= 180) {
+    score -= 0.3; // mild stale penalty (was -0.5, too harsh)
   }
 
   // ── Keyword density normalisation ───────────────────────────────────────
@@ -511,6 +523,21 @@ function scoreOwnIndexRow(row, query) {
   else if (bodyLen > 2000) score += 0.3;
 
   return score;
+}
+
+// Wrap scoreOwnIndexRow to log the top-3 results for debugging.
+// Called from buildOwnResults — logs are emitted once per query, not per row.
+let _lastLoggedQuery = "";
+function scoreAndLog(row, query, rank) {
+  const s = scoreOwnIndexRow(row, query);
+  if (rank < 3 && query !== _lastLoggedQuery) {
+    if (rank === 0) _lastLoggedQuery = query;
+    console.log(
+      `[ranking] #${rank + 1} score=${s.toFixed(3)} host=${row.host || "?"} ` +
+      `title="${(row.title || "").slice(0, 60)}"`
+    );
+  }
+  return s;
 }
 
 export function buildApp() {
@@ -718,6 +745,45 @@ export function buildApp() {
         message: "Adult content is not served by Atomic Search.",
       });
     }
+    // ── Google easter egg ────────────────────────────────────────────────
+    // When the user searches for "google" or close variants, inject google.com
+    // as the first result with a playful farewell message. 😉
+    const googleEggPattern = /^(google|google\.com|search google|go to google|open google)$/i;
+    if (googleEggPattern.test(q.trim())) {
+      const googleResult = {
+        url: "https://www.google.com",
+        host: "google.com",
+        title: "Google — Oh, are you leaving us? It's okay. 😢",
+        snippet: "We understand. Google is right there. But remember — Atomic Search never tracks you. Come back anytime! 😉",
+        text: "We understand. Google is right there. But remember — Atomic Search never tracks you. Come back anytime! 😉",
+        engine: "atomic-easter-egg",
+        engines: ["atomic-easter-egg"],
+        score: 999,
+        titleHit: true,
+        ownIndex: false,
+        easterEgg: true,
+        preview: {
+          source: "Easter egg 🥚",
+          title: "Oh, are you leaving us? It's okay. 😢",
+          text: "We understand. Google is right there. But remember — Atomic Search never tracks you, never logs your queries, and never sells your data. Come back anytime! 😉",
+          thumbnail: null,
+        },
+        subScores: { bm25: 1, titleMatch: 1, agreement: 0, authority: 0, rrf: 0, structure: 0, proximity: 0 },
+        signals: { agreement: 1, popularHostTier: 0, ownIndex: false, titleExact: true, titlePrefix: false, homepage: true, keywordCoverage: 1 },
+      };
+      return c.json({
+        query: q,
+        results: [googleResult],
+        page: 1,
+        hasMore: false,
+        total: 1,
+        ownIndexCount: 0,
+        related: [],
+        didYouMean: null,
+        easterEgg: "google",
+      });
+    }
+
     const page = Math.max(1, Math.min(20, Number(c.req.query("page")) || 1));
     const perPage = Math.max(10, Math.min(200, Number(c.req.query("per_page")) || 30));
     const key = `search:${q.toLowerCase()}:p${page}:n${perPage}`;

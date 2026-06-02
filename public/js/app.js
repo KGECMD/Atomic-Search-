@@ -569,11 +569,90 @@
     );
   }
 
+  /* ---------------- Result pinning (localStorage) ---------------- */
+  var PINS_KEY = "atomic.pins";
+  function loadPins() {
+    try { return JSON.parse(localStorage.getItem(PINS_KEY) || "[]"); } catch (e) { return []; }
+  }
+  function savePins(pins) {
+    try { localStorage.setItem(PINS_KEY, JSON.stringify(pins.slice(0, 50))); } catch (e) { /* ignore */ }
+  }
+  function isPinned(url) { return loadPins().indexOf(url) !== -1; }
+  function togglePin(url) {
+    var pins = loadPins();
+    var idx = pins.indexOf(url);
+    if (idx === -1) pins.unshift(url); else pins.splice(idx, 1);
+    savePins(pins);
+    return idx === -1; // true = now pinned
+  }
+
+  /* ---------------- Privacy score badge ---------------- */
+  // Heuristic privacy score (0–100) based on URL signals.
+  // Higher = more private/safe. Shown as a coloured dot.
+  function privacyScore(url) {
+    if (!url) return 50;
+    var score = 70; // baseline
+    try {
+      var u = new URL(url);
+      // HTTPS is a must.
+      if (u.protocol === "https:") score += 10; else score -= 30;
+      var host = u.hostname.replace(/^www\./, "").toLowerCase();
+      // Known privacy-respecting domains.
+      if (/wikipedia\.org|github\.com|mozilla\.org|archive\.org|rust-lang\.org/.test(host)) score += 15;
+      // Known ad/tracker-heavy domains.
+      if (/doubleclick|googlesyndication|facebook\.com|twitter\.com|tiktok\.com/.test(host)) score -= 25;
+      // Lots of query params = likely tracking.
+      var paramCount = Array.from(u.searchParams.keys()).length;
+      if (paramCount > 5) score -= 10;
+      if (paramCount > 10) score -= 10;
+      // Short paths = likely homepage = less tracking.
+      var depth = u.pathname.replace(/\/+$/, "").split("/").filter(Boolean).length;
+      if (depth === 0) score += 5;
+    } catch (e) { /* ignore */ }
+    return Math.max(0, Math.min(100, score));
+  }
+
+  function privacyBadge(url) {
+    var score = privacyScore(url);
+    var color, label, title;
+    if (score >= 75) { color = "#16a34a"; label = "Private"; title = "Privacy score: " + score + "/100 — this site appears privacy-friendly."; }
+    else if (score >= 45) { color = "#f59e0b"; label = "Caution"; title = "Privacy score: " + score + "/100 — some tracking signals detected."; }
+    else { color = "#dc2626"; label = "Risky"; title = "Privacy score: " + score + "/100 — this site may track you heavily."; }
+    return (
+      '<span class="privacy-badge" title="' + esc(title) + '" aria-label="' + esc(label) + '">' +
+      '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + color + ';margin-right:3px;vertical-align:middle"></span>' +
+      '</span>'
+    );
+  }
+
   function renderResult(r, i, terms) {
     var host = r.host || hostOf(r.url);
     var pathLabel = pathOf(r.url);
     var fav = faviconUrl(host);
     var badges = [];
+    var pinned = isPinned(r.url);
+
+    // Easter egg result gets special styling.
+    if (r.easterEgg) {
+      var eggTitle = highlight(r.title || r.url, terms);
+      var eggSnippet = r.snippet || "";
+      return (
+        '<article class="result easter-egg-result" data-url="' + esc(r.url) + '" style="border:2px dashed var(--accent,#ff4d4d);background:var(--bg-elev,#1a1a22);position:relative;overflow:hidden">' +
+        '  <div style="position:absolute;top:8px;right:10px;font-size:20px;opacity:0.3;pointer-events:none">🥚</div>' +
+        '  <div class="host-line">' +
+        '    <span class="fav" style="background-image:url(' + esc(fav) + ')"></span>' +
+        '    <div style="display:flex;flex-direction:column;min-width:0;flex:1">' +
+        '      <span class="host">' + esc(host) + '</span>' +
+        '      <span class="host-url">' + esc(pathLabel) + '</span>' +
+        '    </div>' +
+        '    <span class="badge" style="background:var(--accent,#ff4d4d);color:#fff;font-size:11px">Easter egg 🥚</span>' +
+        '  </div>' +
+        '  <a class="title" href="' + esc(linkFor(r.url)) + '" rel="noreferrer noopener" target="_top">' + eggTitle + '</a>' +
+        '  <p class="snippet" style="font-style:italic">' + esc(eggSnippet) + '</p>' +
+        '</article>'
+      );
+    }
+
     if (r.ownIndex) badges.push('<span class="badge atomic" title="Matched in the Atomic index">Atomic</span>');
     if (r.agreement && r.agreement >= 2) {
       badges.push('<span class="badge agree" title="Confirmed by ' + r.agreement + ' sources">' + r.agreement + ' sources</span>');
@@ -582,8 +661,9 @@
     var previewHtml = renderPreview(r, terms);
     // Only show the raw snippet paragraph if we have no richer preview.
     var snippetHtml = (!r.preview && r.snippet) ? highlight(r.snippet, terms) : "";
-    var cls = "result" + (r.ownIndex ? " atomic-hit" : "");
+    var cls = "result" + (r.ownIndex ? " atomic-hit" : "") + (pinned ? " pinned-result" : "");
     var whyPanel = renderWhyPanel(r);
+    var privBadge = privacyBadge(r.url);
     return (
       '<article class="' + cls + '" data-url="' + esc(r.url) + '">' +
       '  <div class="host-line">' +
@@ -593,8 +673,12 @@
       '      <span class="host-url" title="' + esc(r.url) + '">' + esc(pathLabel) + "</span>" +
       "    </div>" +
       "    " + badges.join("") +
+      "    " + privBadge +
       '    <button class="result-copy icon-btn" type="button" title="Copy URL" aria-label="Copy URL" data-copy="' + esc(r.url) + '">' +
       '      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>' +
+      '    </button>' +
+      '    <button type="button" class="pin-btn icon-btn" title="' + (pinned ? "Unpin result" : "Pin result") + '" aria-label="' + (pinned ? "Unpin" : "Pin") + '" data-pin="' + esc(r.url) + '" style="' + (pinned ? "color:var(--accent,#ff4d4d)" : "") + '">' +
+      '      <svg viewBox="0 0 24 24" width="14" height="14" fill="' + (pinned ? "currentColor" : "none") + '" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>' +
       '    </button>' +
       '    <button type="button" class="why-toggle icon-btn" title="Why this result?" aria-label="Why this result?" data-why>' +
       '      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 5 0c0 1.5-2.5 2-2.5 3.5"/><circle cx="12" cy="17" r="0.6" fill="currentColor"/></svg>' +
@@ -783,6 +867,27 @@
       why.setAttribute("aria-expanded", panel.hidden ? "false" : "true");
     });
 
+    // Pin button handler — toggle pin and re-render the button state.
+    document.body.addEventListener("click", function (ev) {
+      var btn = ev.target.closest && ev.target.closest("[data-pin]");
+      if (!btn) return;
+      ev.preventDefault();
+      var url = btn.getAttribute("data-pin");
+      if (!url) return;
+      var nowPinned = togglePin(url);
+      // Update button appearance immediately without a full re-render.
+      btn.title = nowPinned ? "Unpin result" : "Pin result";
+      btn.setAttribute("aria-label", nowPinned ? "Unpin" : "Pin");
+      btn.style.color = nowPinned ? "var(--accent,#ff4d4d)" : "";
+      var svg = btn.querySelector("svg");
+      if (svg) svg.setAttribute("fill", nowPinned ? "currentColor" : "none");
+      var card = btn.closest(".result");
+      if (card) {
+        if (nowPinned) card.classList.add("pinned-result");
+        else card.classList.remove("pinned-result");
+      }
+    });
+
     document.body.addEventListener("click", function (ev) {
       var btn = ev.target.closest && ev.target.closest("[data-safe-view]");
       if (!btn) return;
@@ -902,11 +1007,28 @@
       if (!s) return;
       $("stats").textContent =
         (s.persistent
-          ? "Atomic index: " + (s.pages || 0) + " pages indexed \u00b7 " + (s.queue || 0) + " in queue"
+          ? "Atomic index: " + (s.pages || 0).toLocaleString() + " pages indexed \u00b7 " + (s.queue || 0).toLocaleString() + " in queue"
           : "Atomic is running. Submit sites to grow the index.") +
         " \u00b7 " + (s.cacheEntries || 0) + " cached queries" +
         ((s.answers || 0) ? " \u00b7 " + s.answers + " remembered answers" : "");
     }).catch(function () {});
+
+    // Trending topics — fetch from /api/trending and render on home page.
+    (function loadTrending() {
+      var trendingEl = $("trending-section");
+      if (!trendingEl) return;
+      fetch("/api/trending").then(function (r) { return r.json(); }).then(function (d) {
+        var topics = (d && d.trending) || [];
+        if (!topics.length) return;
+        var pills = topics.slice(0, 8).map(function (t) {
+          return '<a class="related-pill trending-pill" href="#" data-related="' + esc(t) + '" style="font-size:13px">' + esc(t) + "</a>";
+        }).join("");
+        trendingEl.innerHTML =
+          '<p class="trending-label" style="font-size:12px;color:var(--text-dim);margin:0 0 6px">Trending in Atomic</p>' +
+          '<div class="trending-pills">' + pills + "</div>";
+        trendingEl.hidden = false;
+      }).catch(function () {});
+    })();
     refreshIndexChip();
     // Slow background refresh so the chip stays fresh while the crawler
     // works through the queue.
