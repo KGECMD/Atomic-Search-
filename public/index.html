@@ -58,6 +58,7 @@
         <div class="home-actions">
           <button type="button" id="open-settings-home">Settings</button>
           <button type="button" id="open-submit-home">Submit a URL</button>
+          <button type="button" id="lucky-btn" title="Go to the top result immediately">I'm Feeling Lucky</button>
         </div>
 
         <p id="stats" class="stats"></p>
@@ -150,6 +151,16 @@
         </form>
 
         <div class="topbar-right">
+          <button id="dark-mode-toggle" class="icon-btn" title="Toggle dark/light mode" aria-label="Toggle dark/light mode">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+            </svg>
+          </button>
+          <button id="export-btn" class="icon-btn" title="Export results (JSON/CSV)" aria-label="Export results" hidden>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </button>
           <button id="open-settings" class="icon-btn" title="Settings" aria-label="Settings">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <circle cx="12" cy="12" r="3"></circle>
@@ -395,6 +406,38 @@
                 <option value="synthwave2">Synthwave II</option>
                 <option value="outrun">Outrun</option>
                 <option value="retrowave">Retrowave</option>
+              </optgroup>
+              <optgroup label="Glass &amp; Soft UI">
+                <option value="glassmorphism">Glassmorphism</option>
+                <option value="glassmorphism-dark">Glassmorphism Dark</option>
+                <option value="neumorphism">Neumorphism</option>
+                <option value="soft-pastel">Soft Pastel</option>
+                <option value="minimalist-pure">Minimalist Pure</option>
+                <option value="zen-garden">Zen Garden</option>
+              </optgroup>
+              <optgroup label="Cyber &amp; Neon">
+                <option value="cyberpunk-2077">Cyberpunk 2077</option>
+                <option value="cyberpunk-neon">Cyberpunk Neon</option>
+                <option value="neon-glow">Neon Glow</option>
+                <option value="brutalism-dark">Brutalism Dark</option>
+                <option value="retro-arcade">Retro Arcade</option>
+                <option value="retro-terminal">Retro Terminal</option>
+              </optgroup>
+              <optgroup label="Nature &amp; Atmosphere">
+                <option value="forest-canopy">Forest Canopy</option>
+                <option value="ocean-depth">Ocean Depth</option>
+                <option value="coral-reef">Coral Reef</option>
+                <option value="aurora-borealis">Aurora Borealis</option>
+                <option value="lava-flow">Lava Flow</option>
+                <option value="steampunk">Steampunk</option>
+              </optgroup>
+              <optgroup label="Colour &amp; Mood">
+                <option value="sunset-gradient">Sunset Gradient</option>
+                <option value="dark-matter">Dark Matter</option>
+                <option value="cosmic">Cosmic</option>
+                <option value="midnight-purple">Midnight Purple</option>
+                <option value="warm-amber">Warm Amber</option>
+                <option value="cool-mint">Cool Mint</option>
               </optgroup>
             </select>
           </div>

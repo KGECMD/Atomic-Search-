@@ -116,12 +116,18 @@
      Press "?" to open a modal listing every keyboard shortcut and
      power-user trick. Pressing "?" or Escape again closes it. */
   var SHORTCUTS = [
-    { k: "/",        d: "Focus the search box" },
-    { k: "Ctrl+K",   d: "Open the command palette" },
-    { k: "?",        d: "Show this cheatsheet" },
-    { k: "Esc",      d: "Close any open modal or suggestion list" },
-    { k: "site:",    d: "Limit results to a domain, e.g. site:github.com raft" },
-    { k: "\"x y\"",  d: "Quoted phrase — require exact phrase match" },
+    { k: "/",           d: "Focus the search box" },
+    { k: "Ctrl+K",      d: "Open the command palette" },
+    { k: "?",           d: "Show this cheatsheet" },
+    { k: "Esc",         d: "Close any open modal or suggestion list" },
+    { k: "Ctrl+Shift+D",d: "Toggle developer mode (ranking debug logs)" },
+    { k: "site:",       d: "Limit results to a domain, e.g. site:github.com raft" },
+    { k: "\"x y\"",     d: "Quoted phrase — require exact phrase match" },
+    { k: "↑↑↓↓←→←→BA", d: "Konami code — surprise! 🎮" },
+    { k: "spin",        d: "Easter egg: spin the logo" },
+    { k: "flip",        d: "Easter egg: flip the page upside down" },
+    { k: "recursion",   d: "Easter egg: did you mean recursion?" },
+    { k: "42",          d: "Easter egg: the answer to everything" },
   ];
   function ensureCheatsheet() {
     var modal = document.getElementById("shortcuts-modal");
@@ -325,6 +331,127 @@
     });
   }
 
+  /* ---------- Search suggestions (history-based autocomplete) ----------
+     Shows a dropdown of recent searches + common suggestions as the user
+     types. Purely local — no network call, no server involvement. */
+  function buildSuggestions(input) {
+    if (!input) return;
+    var wrapper = input.parentElement;
+    if (!wrapper) return;
+    // Ensure wrapper is positioned for the dropdown.
+    if (getComputedStyle(wrapper).position === "static") {
+      wrapper.style.position = "relative";
+    }
+    var dropdown = null;
+    var activeIdx = -1;
+
+    function getItems(val) {
+      val = (val || "").toLowerCase().trim();
+      var hist = loadHistory();
+      var items = [];
+      // History matches first.
+      hist.forEach(function (h) {
+        if (!val || h.toLowerCase().indexOf(val) !== -1) items.push({ label: h, type: "history" });
+      });
+      // Deduplicate.
+      var seen = Object.create(null);
+      return items.filter(function (it) {
+        if (seen[it.label]) return false;
+        seen[it.label] = 1;
+        return true;
+      }).slice(0, 8);
+    }
+
+    function renderDropdown(items) {
+      if (!dropdown) {
+        dropdown = document.createElement("div");
+        dropdown.className = "suggestions-dropdown";
+        wrapper.appendChild(dropdown);
+      }
+      if (!items.length) { hideDropdown(); return; }
+      dropdown.innerHTML = items.map(function (it, i) {
+        return '<div class="suggestion-item' + (i === activeIdx ? " active" : "") + '" data-idx="' + i + '">' +
+          '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">' +
+          (it.type === "history"
+            ? '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>'
+            : '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/>') +
+          '</svg>' +
+          '<span>' + esc(it.label) + '</span>' +
+          '</div>';
+      }).join("");
+      dropdown.hidden = false;
+    }
+
+    function hideDropdown() {
+      if (dropdown) dropdown.hidden = true;
+      activeIdx = -1;
+    }
+
+    input.addEventListener("input", function () {
+      activeIdx = -1;
+      var items = getItems(input.value);
+      renderDropdown(items);
+    });
+
+    input.addEventListener("keydown", function (e) {
+      if (!dropdown || dropdown.hidden) return;
+      var items = getItems(input.value);
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        activeIdx = Math.min(activeIdx + 1, items.length - 1);
+        renderDropdown(items);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        activeIdx = Math.max(activeIdx - 1, -1);
+        renderDropdown(items);
+      } else if (e.key === "Enter" && activeIdx >= 0) {
+        e.preventDefault();
+        var chosen = items[activeIdx];
+        if (chosen) {
+          input.value = chosen.label;
+          hideDropdown();
+          var form = input.closest("form");
+          if (form) {
+            if (typeof form.requestSubmit === "function") form.requestSubmit();
+            else form.dispatchEvent(new Event("submit", { cancelable: true }));
+          }
+        }
+      } else if (e.key === "Escape") {
+        hideDropdown();
+      }
+    });
+
+    input.addEventListener("blur", function () {
+      // Delay so click on dropdown item fires first.
+      setTimeout(hideDropdown, 180);
+    });
+
+    input.addEventListener("focus", function () {
+      if (input.value) {
+        var items = getItems(input.value);
+        renderDropdown(items);
+      }
+    });
+
+    if (dropdown) {
+      dropdown.addEventListener("mousedown", function (e) {
+        var row = e.target.closest(".suggestion-item");
+        if (!row) return;
+        var idx = parseInt(row.getAttribute("data-idx") || "-1", 10);
+        var items = getItems(input.value);
+        if (items[idx]) {
+          input.value = items[idx].label;
+          hideDropdown();
+          var form = input.closest("form");
+          if (form) {
+            if (typeof form.requestSubmit === "function") form.requestSubmit();
+            else form.dispatchEvent(new Event("submit", { cancelable: true }));
+          }
+        }
+      });
+    }
+  }
+
   /* ---------- Boot ---------- */
   document.addEventListener("DOMContentLoaded", function () {
     attachHistory(document.getElementById("q-hero"));
@@ -345,6 +472,10 @@
 
     wireVoice();
     wireResultActions();
+
+    // Wire up history-based suggestions on both search inputs.
+    buildSuggestions(document.getElementById("q-hero"));
+    buildSuggestions(document.getElementById("q"));
 
     document.addEventListener("keydown", function (e) {
       var tag = (e.target && e.target.tagName || "").toLowerCase();
