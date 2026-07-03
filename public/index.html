@@ -6,8 +6,15 @@
     <meta name="description" content="Atomic Search — private, anonymous search powered by its own growing index. No trackers, no logs, no history." />
     <meta name="referrer" content="no-referrer" />
     <meta name="robots" content="noindex, nofollow" />
+    <meta name="theme-color" content="#4a90e2" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Atomic Search" />
     <title>Atomic Search — private, anonymous search</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="preconnect" href="https://www.google.com" />
+    <link rel="dns-prefetch" href="https://www.google.com" />
     <link rel="stylesheet" href="/css/themes.css" />
     <link rel="stylesheet" href="/css/styles.css" />
     <link rel="stylesheet" href="/css/v3.css" />
@@ -477,7 +484,7 @@
     <div id="whatsnew-modal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="whatsnew-title">
       <div class="modal">
         <div class="modal-head">
-          <h2 id="whatsnew-title">What's new in v3.1 — "3rd Anniversary"</h2>
+          <h2 id="whatsnew-title">What's new in v3.2 — "Ultimate Production"</h2>
           <button id="whatsnew-close" class="icon-btn modal-close" type="button" aria-label="Close">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M18 6 6 18M6 6l12 12"></path>
@@ -486,13 +493,14 @@
         </div>
         <div class="modal-body" id="whatsnew-body">
           <ul class="whatsnew-list">
-            <li>🎉 <strong>3rd Anniversary!</strong> — Atomic Search turns 3 on June 1st, 2026. A UCX Industry project by Kayan Erkama. Thank you for using it!</li>
-            <li>🎨 <strong>50+ new themes</strong> — Retro (C64, Atari, DOS, Win95), Nature (Autumn, Tropical, Volcano), Neon variants, Cyberpunk variants, Anime (Steins;Gate, Evangelion), Gaming (Minecraft, Terraria), Brand-inspired (GitHub, Discord, Stripe), Seasonal, Accessibility (Deuteranopia, Protanopia, Tritanopia, Dyslexia-friendly), Mood, and Retro-modern. 100+ themes total.</li>
-            <li>🧠 <strong>Better ranking algorithm</strong> — sliding-window proximity scoring, domain authority tiers (+2 for Wikipedia/GitHub/MDN), exponential freshness decay, query intent detection (tutorial, comparison, debug), keyword density normalisation.</li>
-            <li>⚡ <strong>Faster indexing</strong> — crawler concurrency raised to 20, bloom filter persists URL dedup across restarts, optional meta search provider scraping (set ENABLE_METASEARCH=1).</li>
-            <li>📊 <strong>Index Health badge</strong> — live page count and sync status shown in the bottom-right corner of the home page.</li>
-            <li>🔌 <strong>New API endpoints</strong> — <code>/api/index/stats</code> (detailed index metrics) and <code>/api/trending</code> (curated popular topics, no query logging).</li>
-            <li>🥚 <strong>Easter egg</strong> — type "atomic" anywhere on the home page for a surprise.</li>
+            <li>🎨 <strong>Premium UI/UX</strong> — Complete visual overhaul with smooth animations, skeleton loading states, enhanced result cards, and polished micro-interactions.</li>
+            <li>⚡ <strong>Performance Boost</strong> — Service worker caching, PWA support, optimized rendering, and faster initial page load.</li>
+            <li>🔍 <strong>Search Quality</strong> — Typo tolerance, query intent detection, fuzzy phrase matching, and site: operator support.</li>
+            <li>♿ <strong>Accessibility</strong> — WCAG AA compliance, full keyboard navigation, screen reader support, reduced motion support.</li>
+            <li>🥚 <strong>Easter Eggs</strong> — Type "google", "duckduckgo", or "privacy" for playful surprises. Show once per session.</li>
+            <li>🔒 <strong>Security Hardening</strong> — Enhanced CSP headers, XSS protection, improved rate limiting.</li>
+            <li>📱 <strong>PWA Support</strong> — Install Atomic Search as an app, works offline after first load.</li>
+            <li>⌨️ <strong>Enhanced Shortcuts</strong> — Better command palette (Ctrl+K), keyboard navigation (j/k), toast notifications.</li>
           </ul>
           <div class="whatsnew-actions">
             <button id="whatsnew-dismiss-version" class="btn-primary" type="button">Got it</button>

@@ -363,6 +363,175 @@ export function snippetQualityScore(snippet) {
 // export `variantsFor` publicly (kept stable for tests).
 function variantsForExport(token) { return variantsFor(token); }
 
+// ---------- v3.2: Search Quality Enhancements ----------
+
+// Typo tolerance: calculate Levenshtein distance between two strings
+export function levenshteinDistance(a, b) {
+  if (!a || !b) return Math.max(a?.length || 0, b?.length || 0);
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i];
+  }
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j;
+  }
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
+  }
+  return matrix[b.length][a.length];
+}
+
+// Typo tolerance score: returns 1 for exact match, decreasing for typos
+export function typoToleranceScore(query, text) {
+  if (!query || !text) return 0;
+  const q = query.toLowerCase();
+  const t = text.toLowerCase();
+  if (t.includes(q)) return 1;
+  
+  // Check individual tokens
+  const qTokens = tokenise(q);
+  const tTokens = tokenise(t);
+  let matches = 0;
+  
+  for (const qt of qTokens) {
+    for (const tt of tTokens) {
+      if (qt === tt) {
+        matches++;
+        break;
+      } else {
+        // Allow one character difference for tokens >= 5 chars
+        const dist = levenshteinDistance(qt, tt);
+        if (qt.length >= 5 && dist === 1) {
+          matches++;
+          break;
+        }
+      }
+    }
+  }
+  
+  return qTokens.length > 0 ? matches / qTokens.length : 0;
+}
+
+// Query intent detection: identifies what type of query this is
+export function detectQueryIntent(query) {
+  if (!query) return { type: "general", confidence: 0 };
+  
+  const q = query.toLowerCase();
+  
+  // Tutorial intent
+  if (/\b(how to|how do|how can|learn|tutorial|guide|beginner|steps|teach)\b/.test(q)) {
+    return { type: "tutorial", confidence: 0.9 };
+  }
+  
+  // Comparison intent
+  if (/\b(vs|versus|compared|vs\.|difference|compare)\b/.test(q)) {
+    return { type: "comparison", confidence: 0.85 };
+  }
+  
+  // Definition intent
+  if (/\b(what is|what are|definition|meaning|define|explain)\b/.test(q)) {
+    return { type: "definition", confidence: 0.85 };
+  }
+  
+  // Problem-solving intent
+  if (/\b(fix|error|issue|problem|solve|debug|troubleshoot|not working|broken)\b/.test(q)) {
+    return { type: "problem", confidence: 0.9 };
+  }
+  
+  // Download intent
+  if (/\b(download|free|install|get|try)\b/.test(q) && !/\b(price|buy|cost|purchase)\b/.test(q)) {
+    return { type: "download", confidence: 0.7 };
+  }
+  
+  // News intent
+  if (/\b(news|latest|recent|today|update|announcement)\b/.test(q)) {
+    return { type: "news", confidence: 0.8 };
+  }
+  
+  // Video intent
+  if (/\b(video|watch|stream|listen|watching)\b/.test(q)) {
+    return { type: "video", confidence: 0.8 };
+  }
+  
+  // Local intent
+  if (/\b(near me|nearby|local|around me|closest)\b/.test(q)) {
+    return { type: "local", confidence: 0.9 };
+  }
+  
+  // Product review intent
+  if (/\b(review|best|top|recommend|rating|opinion)\b/.test(q)) {
+    return { type: "review", confidence: 0.8 };
+  }
+  
+  return { type: "general", confidence: 0.5 };
+}
+
+// Enhanced phrase matching with fuzzy support
+export function fuzzyPhraseMatch(query, text, maxEdits = 1) {
+  if (!query || !text) return 0;
+  const q = query.toLowerCase();
+  const t = text.toLowerCase();
+  
+  // Exact match
+  if (t.includes(q)) return 1;
+  
+  // Word-by-word fuzzy matching for longer queries
+  const qWords = tokenise(q);
+  const tWords = tokenise(t);
+  
+  if (qWords.length === 0) return 0;
+  
+  let matchedWords = 0;
+  for (const qw of qWords) {
+    for (const tw of tWords) {
+      if (qw === tw) {
+        matchedWords++;
+        break;
+      } else if (qw.length >= 4 && tw.length >= 4) {
+        const dist = levenshteinDistance(qw, tw);
+        if (dist <= maxEdits) {
+          matchedWords++;
+          break;
+        }
+      }
+    }
+  }
+  
+  return matchedWords / qWords.length;
+}
+
+// Site: operator extraction and matching
+export function extractSiteOperator(query) {
+  const match = query.match(/\bsite:(\S+)/i);
+  if (match) {
+    return {
+      site: match[1].replace(/^\*\.?/, ""), // Remove leading wildcard
+      remainingQuery: query.replace(/\bsite:\S+/i, "").trim(),
+    };
+  }
+  return { site: null, remainingQuery: query };
+}
+
+export function matchSiteOperator(resultUrl, site) {
+  if (!site) return 1; // No site restriction
+  try {
+    const host = new URL(resultUrl).hostname.toLowerCase();
+    return host.includes(site.toLowerCase()) ? 1.5 : 0; // Bonus for exact site match
+  } catch {
+    return 0;
+  }
+}
+
 // ---------- combine ----------
 
 export function combineScore(signals, weights = WEIGHTS) {

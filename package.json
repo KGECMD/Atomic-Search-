@@ -1,6 +1,6 @@
 {
   "name": "atomic-search",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "Atomic Search — privacy-first search with its own growing anonymous index. No trackers, no logs, no history.",
   "private": true,
   "type": "module",
@@ -9,6 +9,8 @@
     "start": "node server.js",
     "dev": "node server.js",
     "build": "echo 'nothing to build — static frontend is in ./public'",
+    "test": "node --test src/ranking.test.js",
+    "test:watch": "node --test --watch src/ranking.test.js",
     "wrangler:dev": "wrangler pages dev ./public --compatibility-date=2024-09-01",
     "wrangler:deploy": "wrangler pages deploy ./public"
   },

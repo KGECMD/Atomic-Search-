@@ -15,6 +15,12 @@ import {
   agreementScore,
   rrfNormalised,
   combineScore,
+  levenshteinDistance,
+  typoToleranceScore,
+  detectQueryIntent,
+  fuzzyPhraseMatch,
+  extractSiteOperator,
+  matchSiteOperator,
 } from "./ranking.js";
 
 test("WEIGHTS sum to exactly 1.0", () => {
@@ -159,4 +165,103 @@ test("integration: 'linux kernel' → Linux kernel page wins", () => {
   assert.ok(canonical > tangent, `canonical(${canonical}) should beat tangent(${tangent})`);
   assert.ok(canonical > blog, `canonical(${canonical}) should beat blog(${blog})`);
   assert.ok(homepage > blog, `homepage(${homepage}) should beat blog(${blog})`);
+});
+
+// ---------- v3.2: New Search Quality Tests ----------
+
+test("levenshteinDistance: basic string distance", () => {
+  assert.equal(levenshteinDistance("cat", "cat"), 0); // identical
+  assert.equal(levenshteinDistance("cat", "bat"), 1); // one substitution
+  assert.equal(levenshteinDistance("cat", "cats"), 1); // one insertion
+  assert.equal(levenshteinDistance("cat", "at"), 1); // one deletion
+  assert.equal(levenshteinDistance("kitten", "sitting"), 3); // classic example
+});
+
+test("typoToleranceScore: exact match returns 1", () => {
+  assert.equal(typoToleranceScore("javascript", "Learn javascript"), 1);
+});
+
+test("typoToleranceScore: partial token match", () => {
+  const score = typoToleranceScore("react hooks", "using react hook api");
+  assert.ok(score > 0.5, `score ${score} should be > 0.5`);
+});
+
+test("typoToleranceScore: handles empty inputs", () => {
+  assert.equal(typoToleranceScore("", "test"), 0);
+  assert.equal(typoToleranceScore("test", ""), 0);
+  assert.equal(typoToleranceScore("", ""), 0);
+});
+
+test("detectQueryIntent: tutorial queries", () => {
+  const intent = detectQueryIntent("how to install nodejs");
+  assert.equal(intent.type, "tutorial");
+  assert.ok(intent.confidence >= 0.8);
+});
+
+test("detectQueryIntent: comparison queries", () => {
+  const intent = detectQueryIntent("react vs vue vs angular");
+  assert.equal(intent.type, "comparison");
+  assert.ok(intent.confidence >= 0.8);
+});
+
+test("detectQueryIntent: definition queries", () => {
+  const intent = detectQueryIntent("what is a closure in javascript");
+  assert.equal(intent.type, "definition");
+  assert.ok(intent.confidence >= 0.8);
+});
+
+test("detectQueryIntent: debug queries", () => {
+  const intent = detectQueryIntent("fix npm error not found");
+  assert.equal(intent.type, "problem");
+  assert.ok(intent.confidence >= 0.8);
+});
+
+test("detectQueryIntent: general queries default", () => {
+  const intent = detectQueryIntent("random web search");
+  assert.equal(intent.type, "general");
+  assert.ok(intent.confidence >= 0.4);
+});
+
+test("fuzzyPhraseMatch: exact match returns 1", () => {
+  assert.equal(fuzzyPhraseMatch("linux kernel", "about the linux kernel"), 1);
+});
+
+test("fuzzyPhraseMatch: partial match returns partial score", () => {
+  const score = fuzzyPhraseMatch("how to use python", "tutorial about python basics");
+  assert.ok(score > 0, `score ${score} should be > 0`);
+  assert.ok(score < 1, `score ${score} should be < 1`);
+});
+
+test("fuzzyPhraseMatch: empty inputs return 0", () => {
+  assert.equal(fuzzyPhraseMatch("", "test"), 0);
+  assert.equal(fuzzyPhraseMatch("test", ""), 0);
+});
+
+test("extractSiteOperator: extracts site from query", () => {
+  const result = extractSiteOperator("react hooks site:github.com");
+  assert.equal(result.site, "github.com");
+  assert.equal(result.remainingQuery, "react hooks");
+});
+
+test("extractSiteOperator: no site operator", () => {
+  const result = extractSiteOperator("regular search query");
+  assert.equal(result.site, null);
+  assert.equal(result.remainingQuery, "regular search query");
+});
+
+test("extractSiteOperator: wildcard subdomain", () => {
+  const result = extractSiteOperator("docs site:*.google.com");
+  assert.equal(result.site, "google.com");
+});
+
+test("matchSiteOperator: exact match returns bonus", () => {
+  assert.ok(matchSiteOperator("https://github.com/user/repo", "github.com") > 1);
+});
+
+test("matchSiteOperator: no match returns 0", () => {
+  assert.equal(matchSiteOperator("https://example.com", "github.com"), 0);
+});
+
+test("matchSiteOperator: no site restriction returns 1", () => {
+  assert.equal(matchSiteOperator("https://any.com", null), 1);
 });

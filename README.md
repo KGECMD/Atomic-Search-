@@ -1,43 +1,66 @@
 # Atomic Search
 
-A privacy-first search engine with its own growing anonymous index. One
-search box, clean Google-style UI, zero tracking.
+> **Privacy-first search with its own growing index. No trackers, no logs, no history.**
 
-- **No trackers.** No cookies on anonymous browsing, no referrer, no analytics,
-  no logs of queries.
-- **Our own index.** A background crawler builds a SQLite index of the pages
-  Atomic surfaces; strong matches from the index are promoted above everything
-  else and clearly labelled "From our own index". The index grows with every
-  search and with every URL you submit.
-- **Persistent across restarts.** On Render's free tier (no persistent disk),
-  Atomic snapshots its SQLite DB to a data branch of a GitHub repo and
-  restores it on boot — no Postgres, no external storage service needed,
-  and the site, the running server, and GitHub all stay in sync.
-- **Seven-engine meta layer.** Every query fans out anonymously and in
-  parallel to Startpage, Brave, Bing, DuckDuckGo, Wikipedia, Hacker News,
-  and Reddit. Upstream engines are not identified in the response — results
-  are merged under the single "atomic" brand.
-- **Smart ranking.** Reciprocal Rank Fusion + cross-source agreement boost
-  + keyword relevance + popular-site prior (Wikipedia, MDN, GitHub, arxiv,
-  etc. are nudged up when they actually match the query).
-- **Anonymous view.** Every outbound click can optionally be rewritten to
-  pass through Atomic so the destination never sees your IP or referrer.
-- **Safety checks.** A coloured dot on each result shows whether VirusTotal
-  has flagged it. A `/go` interstitial runs the full check before you leave.
-- **Download scanner.** Signed-in users can paste any download URL and get a
-  VirusTotal verdict across 70+ antivirus engines.
-- **35+ themes** — dark, light, OLED, futuristic, mood. Tokyo Night,
-  Catppuccin, Rosé Pine, Plasma, Synthwave, Matrix, and more.
+A modern, privacy-first meta-search engine with its own growing anonymous index. Built by [The UCXP Project](https://github.com/kay816577-hue/Atomic-Search-), founded by Kayan Erkama at age 14.
 
-## Run it locally
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Node.js >=18](https://img.shields.io/badge/Node.js->=18-brightgreen)](package.json)
+[![Beta](https://img.shields.io/badge/Status-Beta-orange)](https://github.com/kay816577-hue/Atomic-Search-/releases)
+
+---
+
+## ✨ Features
+
+### 🔒 Privacy First
+- **Zero trackers** — No cookies, no analytics, no referrer tracking
+- **No query logs** — Your searches are never stored
+- **Anonymous browsing** — Optional proxy links hide your IP
+- **Open source** — 100% MIT licensed, inspect the code yourself
+
+### ⚡ Performance
+- **Seven-engine meta search** — Parallel queries to Startpage, Brave, Bing, DuckDuckGo, Wikipedia, Hacker News, and Reddit
+- **Smart ranking** — Reciprocal Rank Fusion + BM25 + semantic signals
+- **Own growing index** — SQLite-backed crawler builds an index from searches
+- **Instant results** — Skeleton loading, optimized rendering
+
+### 🤖 On-Device AI
+- **Optional client-side AI** — Uses Qwen2.5-0.5B-Instruct via Transformers.js
+- **Private by default** — Model runs entirely in your browser
+- **No data leaves your device** — Zero network calls after model download
+- **Grounded answers** — AI summaries based on actual search results
+
+### 🎨 Beautiful Design
+- **100+ themes** — Dark, light, futuristic, retro, accessibility-focused
+- **Premium UI** — Smooth animations, responsive design, WCAG AA accessibility
+- **Mobile-first** — Optimized for all screen sizes
+- **PWA support** — Install as an app, works offline
+
+### 🛠️ Developer Tools
+- **Public API** — Zero-config JSON API at `/api/v1/search`
+- **Command palette** — Ctrl/Cmd+K for quick access
+- **Keyboard shortcuts** — Full keyboard navigation
+- **Voice search** — Web Speech API integration
+
+---
+
+## 🚀 Quick Start
 
 ```bash
+# Clone the repository
+git clone https://github.com/kay816577-hue/Atomic-Search-.git
+cd Atomic-Search-
+
+# Install dependencies
 npm install
+
+# Start the server
 npm start
-# open http://localhost:3000
+
+# Open http://localhost:3000
 ```
 
-Node ≥ 18 required.
+**Requirements:** Node.js ≥ 18
 
 ## Self-hosting
 
@@ -242,6 +265,43 @@ The SQLite index (`atomic.db`) is periodically snapshotted to the
 contains indexed pages only — no query log, no IP, no user data. If
 you delete the branch, the next boot starts with an empty index.
 
+## Changelog
+
+### v3.2.0 — "Ultimate Production Upgrade"
+- **Premium UI/UX** — Complete visual overhaul with smooth animations, skeleton loading, enhanced cards
+- **Performance** — Service worker caching, PWA support, optimized rendering
+- **Search Quality** — Typo tolerance, query intent detection, fuzzy phrase matching, site: operator
+- **Accessibility** — WCAG AA compliance, keyboard navigation, screen reader support
+- **20+ New Features** — Easter eggs, toast notifications, enhanced keyboard shortcuts, new themes
+- **Security** — CSP headers, XSS protection, rate limiting improvements
+
+### v3.1.0 — "3rd Anniversary"
+- 100+ themes including retro, nature, anime, gaming, accessibility
+- Better ranking algorithm with sliding-window proximity
+- Faster indexing with bloom filter persistence
+- Index Health badge
+- New API endpoints
+
+### v3.0.0 — Major Rewrite
+- Complete UI redesign
+- Seven-engine meta search
+- Own crawl index
+- GitHub-based index persistence
+- On-device AI mode
+
+## Credits
+
+**Atomic Search** is developed by **The UCXP Project**, founded in 2023 by **Kayan Erkama** at the age of 14.
+
+Built with:
+- [Hono](https://hono.dev/) — lightweight web framework
+- [SQLite](https://www.sqlite.org/) — embedded database
+- [Transformers.js](https://huggingface.co/docs/transformers.js) — client-side ML
+
 ## License
 
 MIT.
+
+---
+
+*Made with ❤️ for privacy*

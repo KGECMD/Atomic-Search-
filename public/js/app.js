@@ -1,13 +1,24 @@
 (function () {
   "use strict";
 
+  /* ---------------- Version info ---------------- */
+  var VERSION = "3.2.0";
+
   /* ---------------- Settings (localStorage) ---------------- */
-  var SETTINGS_KEY = "atomic.settings";
+  var SETTINGS_KEY = "atomic:settings";
   var defaultSettings = {
     safety: true,
     proxyLinks: true,
     perPage: 50,
+    instantSearch: true,
+    keyboardShortcuts: true,
+    showRelatedSearches: true,
+    preferOwnIndex: false,
+    newTabBehavior: true,
+    animateResults: true,
+    compactMode: false,
   };
+  
   function loadSettings() {
     try {
       var raw = localStorage.getItem(SETTINGS_KEY);
@@ -24,7 +35,15 @@
   /* Auth was removed in v2 — Atomic is fully anonymous, no cookies. */
 
   /* ---------------- State ---------------- */
-  var state = { q: "", tab: "all", page: 1 };
+  var state = { q: "", tab: "all", page: 1, loading: false };
+
+  /* ---------------- Easter Egg State ---------------- */
+  var easterEggState = {
+    googleShown: false,
+    duckduckgoShown: false,
+    bingShown: false,
+    atomicKonamiShown: false,
+  };
 
   /* ---------------- Helpers ---------------- */
   function $(id) { return document.getElementById(id); }
@@ -47,9 +66,270 @@
       return (u.hostname.replace(/^www\./, "") + (p ? " › " + p.split("/").filter(Boolean).slice(0, 3).join(" › ") : "")).trim();
     } catch (e) { return url; }
   }
-  function linkFor(url) {
-    if (settings.proxyLinks) return "/go?url=" + encodeURIComponent(url);
-    return url;
+  function linkFor(url, targetBlank) {
+    var link = settings.proxyLinks ? "/go?url=" + encodeURIComponent(url) : url;
+    return { href: link, target: (targetBlank || settings.newTabBehavior) ? "_blank" : "_self" };
+  }
+  
+  /* ---------------- Loading Animation ---------------- */
+  var loadingDots = 0;
+  var loadingInterval = null;
+  function getLoadingText() {
+    loadingDots = (loadingDots + 1) % 4;
+    return "Searching" + ".".repeat(loadingDots);
+  }
+  function showLoading() {
+    state.loading = true;
+    var el = $("results");
+    if (el) {
+      el.innerHTML = '<div class="loading-skeleton">' +
+        Array.from({length: settings.perPage || 10}, function() {
+          return '<div class="skeleton-result">' +
+            '<div class="skeleton-badge"></div>' +
+            '<div class="skeleton-title"></div>' +
+            '<div class="skeleton-url"></div>' +
+            '<div class="skeleton-snippet"></div>' +
+            '<div class="skeleton-snippet short"></div>' +
+          '</div>';
+        }).join("") +
+      '</div>';
+    }
+  }
+  function hideLoading() {
+    state.loading = false;
+  }
+
+  /* ---------------- Toast Notifications ---------------- */
+  var toastTimeout = null;
+  function showToast(message, duration) {
+    var existing = $("atomic-toast");
+    if (existing) existing.remove();
+    
+    var toast = document.createElement("div");
+    toast.id = "atomic-toast";
+    toast.className = "atomic-toast";
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    
+    requestAnimationFrame(function() {
+      toast.classList.add("atomic-toast-show");
+    });
+    
+    if (toastTimeout) clearTimeout(toastTimeout);
+    toastTimeout = setTimeout(function() {
+      toast.classList.remove("atomic-toast-show");
+      setTimeout(function() { toast.remove(); }, 300);
+    }, duration || 2500);
+  }
+
+  /* ---------------- Easter Eggs ---------------- */
+  function checkEasterEgg(q) {
+    var query = q.toLowerCase().trim();
+    
+    // Google easter egg
+    if (!easterEggState.googleShown && query === "google") {
+      easterEggState.googleShown = true;
+      showEasterEggBanner(
+        "Really? We care about privacy more. 😢",
+        "This banner will only show once per session.",
+        "https://github.com/kay816577-hue/Atomic-Search-",
+        "Learn more about Atomic"
+      );
+      return;
+    }
+    
+    // DuckDuckGo easter egg
+    if (!easterEggState.duckduckgoShown && (query === "duckduckgo" || query === "duck duck go" || query === "ddg")) {
+      easterEggState.duckduckgoShown = true;
+      showEasterEggBanner(
+        "We ❤️ DuckDuckGo! Privacy champions unite. 🦆",
+        "Multiple privacy-focused search engines make the web better.",
+        "https://github.com/kay816577-hue/Atomic-Search-/discussions",
+        "Join the discussion"
+      );
+      return;
+    }
+    
+    // Bing easter egg
+    if (!easterEggState.bingShown && query === "bing") {
+      easterEggState.bingShown = true;
+      showEasterEggBanner(
+        "Bing is great! But Atomic keeps you more private. 🔍",
+        "This banner will only show once per session.",
+        "https://github.com/kay816577-hue/Atomic-Search-/issues",
+        "Report a bug"
+      );
+      return;
+    }
+    
+    // Privacy easter eggs
+    if (query === "privacy" || query === "what is privacy") {
+      showToast("Privacy is not just a feature — it's a right. 🛡️", 4000);
+      return;
+    }
+    
+    // Open source easter egg
+    if (query === "open source" || query === "open-source" || query === "foss") {
+      showToast("Atomic Search is 100% open source! MIT Licensed. 📖", 4000);
+      return;
+    }
+    
+    // UCXP easter egg
+    if (query === "ucxp" || query === "ucx") {
+      showToast("UCXP Project — founded by Kayan Erkama at 14! 🚀", 4000);
+      return;
+    }
+    
+    // Matrix easter egg for tech-savvy users
+    if (query === "there is no spoon" || query === "follow the white rabbit") {
+      showToast("The Matrix has you... but Atomic has your privacy. 🐇", 4000);
+      return;
+    }
+  }
+  
+  function showEasterEggBanner(message, subtitle, link, linkText) {
+    var existing = $("easter-egg-banner");
+    if (existing) existing.remove();
+    
+    var banner = document.createElement("div");
+    banner.id = "easter-egg-banner";
+    banner.className = "easter-egg-banner";
+    banner.setAttribute("role", "status");
+    banner.setAttribute("aria-live", "polite");
+    banner.innerHTML =
+      '<div class="easter-egg-inner">' +
+        '<button class="easter-egg-close" aria-label="Dismiss">' +
+          '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>' +
+        '</button>' +
+        '<p class="easter-egg-message">' + esc(message) + '</p>' +
+        '<p class="easter-egg-subtitle">' + esc(subtitle) + '</p>' +
+        '<a href="' + esc(link) + '" target="_blank" rel="noopener" class="easter-egg-link">' + esc(linkText) + ' →</a>' +
+      '</div>';
+    
+    document.body.appendChild(banner);
+    requestAnimationFrame(function() {
+      banner.classList.add("easter-egg-visible");
+    });
+    
+    banner.querySelector(".easter-egg-close").addEventListener("click", function() {
+      banner.classList.remove("easter-egg-visible");
+      setTimeout(function() { banner.remove(); }, 300);
+    });
+    
+    setTimeout(function() {
+      if ($("easter-egg-banner")) {
+        banner.classList.remove("easter-egg-visible");
+        setTimeout(function() { banner.remove(); }, 300);
+      }
+    }, 8000);
+  }
+
+  /* ---------------- Accessibility Enhancements ---------------- */
+  function announceToScreenReader(message) {
+    var el = document.createElement("div");
+    el.setAttribute("role", "status");
+    el.setAttribute("aria-live", "polite");
+    el.setAttribute("aria-atomic", "true");
+    el.className = "sr-only";
+    el.textContent = message;
+    document.body.appendChild(el);
+    setTimeout(function() { el.remove(); }, 1000);
+  }
+
+  /* ---------------- Keyboard Navigation ---------------- */
+  var activeResultIndex = -1;
+  var resultLinks = [];
+  
+  function updateActiveResult(delta) {
+    var results = document.querySelectorAll(".result[data-index]");
+    if (!results.length) return;
+    
+    if (activeResultIndex >= 0 && results[activeResultIndex]) {
+      results[activeResultIndex].classList.remove("result-active");
+    }
+    
+    activeResultIndex = Math.max(0, Math.min(results.length - 1, activeResultIndex + delta));
+    
+    if (results[activeResultIndex]) {
+      results[activeResultIndex].classList.add("result-active");
+      results[activeResultIndex].scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }
+  
+  function activateResult() {
+    var results = document.querySelectorAll(".result[data-index]");
+    if (results[activeResultIndex]) {
+      var link = results[activeResultIndex].querySelector(".title");
+      if (link) {
+        if (settings.newTabBehavior) {
+          window.open(link.href, "_blank", "noreferrer noopener");
+        } else {
+          link.click();
+        }
+      }
+    }
+  }
+
+  /* ---------------- Skeleton Loading Styles ---------------- */
+  function injectSkeletonStyles() {
+    if (document.getElementById("skeleton-styles")) return;
+    var style = document.createElement("style");
+    style.id = "skeleton-styles";
+    style.textContent = `
+      .loading-skeleton { padding: 20px 0; }
+      .skeleton-result {
+        padding: 16px 0;
+        border-bottom: 1px solid var(--border-soft);
+        animation: skeleton-pulse 1.5s ease-in-out infinite;
+      }
+      .skeleton-badge {
+        width: 60px; height: 18px;
+        background: var(--bg-elev-2);
+        border-radius: 999px;
+        margin-bottom: 8px;
+      }
+      .skeleton-title {
+        width: 70%; height: 22px;
+        background: var(--bg-elev-1);
+        border-radius: 6px;
+        margin-bottom: 6px;
+      }
+      .skeleton-url {
+        width: 40%; height: 14px;
+        background: var(--bg-elev-2);
+        border-radius: 4px;
+        margin-bottom: 8px;
+      }
+      .skeleton-snippet {
+        width: 100%; height: 16px;
+        background: var(--bg-elev-1);
+        border-radius: 4px;
+        margin-bottom: 4px;
+      }
+      .skeleton-snippet.short { width: 65%; }
+      @keyframes skeleton-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+      }
+      .sr-only {
+        position: absolute;
+        width: 1px; height: 1px;
+        padding: 0; margin: -1px;
+        overflow: hidden;
+        clip: rect(0,0,0,0);
+        white-space: nowrap;
+        border: 0;
+      }
+      .result-active {
+        outline: 2px solid var(--accent) !important;
+        outline-offset: 2px;
+        border-radius: 12px;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .skeleton-result { animation: none; }
+      }
+    `;
+    document.head.appendChild(style);
   }
 
   /* ---------------- Views ---------------- */
