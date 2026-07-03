@@ -804,6 +804,109 @@ mark {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
+/* ================================================================
+ * ATOMIC SEARCH v3.2 — Premium UI/UX ENHANCEMENTS
+ * ================================================================ */
+
+/* ---------- Easter Egg Banners ---------- */
+.easter-egg-banner {
+  position: fixed;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-20px);
+  z-index: 10000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+.easter-egg-banner.easter-egg-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+.easter-egg-inner {
+  background: linear-gradient(135deg, var(--bg-elev-1), var(--bg-elev-2));
+  border: 1px solid var(--accent);
+  border-radius: 16px;
+  padding: 20px 24px;
+  max-width: 480px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), 0 0 60px color-mix(in srgb, var(--accent) 20%, transparent);
+  text-align: center;
+  position: relative;
+}
+.easter-egg-close {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  background: transparent;
+  border: none;
+  color: var(--text-mute);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 16px;
+  line-height: 1;
+  transition: color 0.15s, background 0.15s;
+}
+.easter-egg-close:hover {
+  color: var(--text);
+  background: var(--bg-elev-1);
+}
+.easter-egg-message {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 8px;
+  line-height: 1.4;
+}
+.easter-egg-subtitle {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin: 0 0 14px;
+}
+.easter-egg-link {
+  display: inline-block;
+  padding: 8px 18px;
+  background: var(--accent);
+  color: #fff !important;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none !important;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.easter-egg-link:hover {
+  opacity: 0.88;
+  transform: translateY(-1px);
+  text-decoration: none !important;
+}
+
+/* ---------- Enhanced Toast Notifications ---------- */
+#atomic-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 80px;
+  transform: translateX(-50%) translateY(12px);
+  background: linear-gradient(135deg, var(--bg-elev-1), var(--bg-elev-2));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 24px;
+  font-size: 14px;
+  color: var(--text);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  z-index: 10001;
+  opacity: 0;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 90vw;
+}
+#atomic-toast.atomic-toast-show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ---------- Screen Reader Only ---------- */
 .sr-only {
   position: absolute;
   width: 1px; height: 1px;

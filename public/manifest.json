@@ -1,0 +1,38 @@
+{
+  "name": "Atomic Search",
+  "short_name": "Atomic",
+  "description": "Privacy-first search with its own growing index. No trackers, no logs, no history.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f1117",
+  "theme_color": "#4a90e2",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["search", "utilities", "productivity"],
+  "orientation": "any",
+  "scope": "/",
+  "lang": "en",
+  "dir": "ltr",
+  "shortcuts": [
+    {
+      "name": "Search",
+      "short_name": "Search",
+      "description": "Start a new search",
+      "url": "/?q=",
+      "icons": [{ "src": "/favicon.svg", "sizes": "any" }]
+    },
+    {
+      "name": "Tools",
+      "short_name": "Tools",
+      "description": "Privacy-first developer tools",
+      "url": "/tools",
+      "icons": [{ "src": "/favicon.svg", "sizes": "any" }]
+    }
+  ]
+}

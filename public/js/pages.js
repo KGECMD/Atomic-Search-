@@ -15,8 +15,8 @@
     about: {
       title: "About Atomic Search",
       body:
-        '<p><strong>Atomic is in beta.</strong> Core features are stable and in daily use, but new functionality lands often — expect the occasional rough edge. Bug reports and PRs are very welcome on <a href="https://github.com/kay816577-hue/Atomic-Search-/issues" target="_blank" rel="noopener">GitHub</a>.</p>' +
-        '<p>Atomic is a privacy-first meta-search engine with its own growing anonymous index. ' +
+        '<p><strong>Atomic Search is in beta.</strong> Core features are stable and in daily use, but new functionality lands often — expect the occasional rough edge. Bug reports and PRs are very welcome on <a href="https://github.com/kay816577-hue/Atomic-Search-/issues" target="_blank" rel="noopener">GitHub</a>.</p>' +
+        '<p>Atomic Search is a privacy-first meta-search engine with its own growing anonymous index. ' +
         'One search box, clean UI, zero tracking — and no accounts, no cookies, no per-user data.</p>' +
         '<h3>What makes it different</h3>' +
         '<ul>' +
@@ -24,11 +24,15 @@
         '<li><strong>Our own growing index.</strong> Every search grows a private SQLite index of the pages people actually visit. Strong matches from that index are promoted with a visible "FROM OUR OWN INDEX" badge.</li>' +
         '<li><strong>Restart-safe.</strong> On Render / Vercel, the SQLite index is snapshotted to a GitHub data branch every 2 min and restored on boot — so the site, the running server, and GitHub stay in sync forever.</li>' +
         '<li><strong>Zero-config public API.</strong> Anyone can hit <code>/api/v1/search</code> from anywhere, no key required.</li>' +
+        '<li><strong>Optional on-device AI.</strong> Enable client-side AI mode for search result summarization — your queries never leave your browser.</li>' +
+        '<li><strong>Offline-capable PWA.</strong> Install Atomic Search as a Progressive Web App for fast loading and offline access.</li>' +
         '</ul>' +
         '<h3>Open source</h3>' +
         '<p>MIT-licensed. <a href="https://github.com/kay816577-hue/Atomic-Search-" target="_blank" rel="noopener">Source on GitHub</a>.</p>' +
         '<h3>Who builds it</h3>' +
-        '<p>Atomic Search is a <strong>UCX Industry</strong> project, founded in 2023 by <strong>Kayan Erkama</strong>. Contributions welcome via pull request.</p>',
+        '<p>Atomic Search is developed by <strong>The UCXP Project</strong>, founded in 2023 by <strong>Kayan Erkama</strong> at the age of 14. Contributions welcome via pull request.</p>' +
+        '<h3>Version</h3>' +
+        '<p>Running <strong>v3.2.0</strong> — see the <a href="#" data-page="whatsnew">What\'s New</a> page for the latest changes.</p>',
     },
 
     "self-hosting": {
