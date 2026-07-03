@@ -157,7 +157,7 @@ site are always in sync — even across Render's free-tier deploy wipes.
 
 ## Terms of Service
 
-_Last updated: 2026. These terms apply to atomicsearch.io and any other
+_Last updated: 2026. These terms apply to atomicsearch. and the UCXP Project/KGEcmd and any other
 deployment of this codebase. They describe what the software does and the
 promises it actually keeps._
 
@@ -225,12 +225,7 @@ If you find a discrepancy, it is a bug — open an issue._
   interstitial) or `/proxy` (an anonymous HTML proxy). Both drop your
   IP, referrer, and cookies before the outbound fetch.
 
-### Sign-in (optional)
 
-If the operator has configured Google OAuth or SMTP magic-link sign-in,
-the only user data stored is: the email address you signed in with, a
-numeric user id, and the session expiry. You can delete your account at
-any time by signing out and contacting the operator.
 
 ### SSRF + sandbox guarantees
 
